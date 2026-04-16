@@ -178,12 +178,10 @@ unsafe fn minus_product_shift_avx2(
             let a0 = _mm256_sub_epi32(zv0, _mm256_mullo_epi32(yv0, cv));
 
             // Batch 1: elements start+8..start+16
-            let zv1 = _mm256_cvtepi16_epi32(
-                _mm_loadu_si128(z.as_ptr().add(start + 8) as *const __m128i),
-            );
-            let yv1 = _mm256_cvtepi16_epi32(
-                _mm_loadu_si128(y.as_ptr().add(start + 8) as *const __m128i),
-            );
+            let zv1 =
+                _mm256_cvtepi16_epi32(_mm_loadu_si128(z.as_ptr().add(start + 8) as *const __m128i));
+            let yv1 =
+                _mm256_cvtepi16_epi32(_mm_loadu_si128(y.as_ptr().add(start + 8) as *const __m128i));
             let a1 = _mm256_sub_epi32(zv1, _mm256_mullo_epi32(yv1, cv));
 
             // Barrett freeze batch 0
@@ -229,8 +227,7 @@ unsafe fn minus_product_shift_avx2(
 
         // Scalar remainder
         while j >= 0 {
-            z[(j + 1) as usize] =
-                modq::minus_product(z[j as usize], y[j as usize], c, q, b1, b2);
+            z[(j + 1) as usize] = modq::minus_product(z[j as usize], y[j as usize], c, q, b1, b2);
             j -= 1;
         }
         z[0] = 0;
