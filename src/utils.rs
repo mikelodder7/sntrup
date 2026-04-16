@@ -305,11 +305,7 @@ pub(crate) fn derive_key(
     clippy::cast_sign_loss,
     clippy::cast_possible_wrap
 )]
-pub(crate) fn create_cipher(
-    r: &[i8],
-    pk: &[u8],
-    params: &SntrupParameters,
-) -> (Vec<u8>, [u8; 32]) {
+pub(crate) fn create_cipher(r: &[i8], pk: &[u8], params: &SntrupParameters) -> (Vec<u8>, [u8; 32]) {
     let p = params.p;
 
     let h = rq::encoding::rq_decode(pk, params);
@@ -354,11 +350,7 @@ pub(crate) fn create_cipher(
     clippy::cast_sign_loss,
     clippy::cast_possible_wrap
 )]
-pub(crate) fn decapsulate_inner(
-    cstr: &[u8],
-    sk: &[u8],
-    params: &SntrupParameters,
-) -> [u8; 32] {
+pub(crate) fn decapsulate_inner(cstr: &[u8], sk: &[u8], params: &SntrupParameters) -> [u8; 32] {
     let p = params.p;
     let w = params.w;
     let ses = params.small_encode_size;
@@ -381,9 +373,12 @@ pub(crate) fn decapsulate_inner(
     rq::mult(&mut cf, &c, &f, params);
     let mut t3 = vec![0i8; p];
     for i in 0..p {
-        t3[i] = r3::mod3::freeze(
-            rq::modq::freeze(3 * cf[i] as i32, params.q, params.barrett1, params.barrett2) as i32,
-        );
+        t3[i] = r3::mod3::freeze(rq::modq::freeze(
+            3 * cf[i] as i32,
+            params.q,
+            params.barrett1,
+            params.barrett2,
+        ) as i32);
     }
     let mut r = vec![0i8; p];
     r3::mult(&mut r, &t3, &ginv, p);
@@ -406,8 +401,7 @@ pub(crate) fn decapsulate_inner(
     rq::mult(&mut hr, &h, &r, params);
     rq::round3(&mut hr, params);
     let mut cnew = vec![0u8; params.ct_size];
-    cnew[..params.rounded_encode_size]
-        .copy_from_slice(&rq::encoding::rounded_encode(&hr, params));
+    cnew[..params.rounded_encode_size].copy_from_slice(&rq::encoding::rounded_encode(&hr, params));
     let mut confirm = [0u8; 32];
     hash_confirm(&mut confirm, &r_enc, &cache);
     cnew[params.rounded_encode_size..].copy_from_slice(&confirm);

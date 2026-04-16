@@ -50,7 +50,15 @@ pub fn reciprocal3(s: &[i8], params: &SntrupParameters) -> Vec<i16> {
         vector::swap(&mut f, &mut g, p + 1, m);
         vector::swap(&mut u, &mut v, loops + 1, m);
     }
-    vector::product(&mut r, p, &u[p..], modq::reciprocal(f[p], q, b1, b2), q, b1, b2);
+    vector::product(
+        &mut r,
+        p,
+        &u[p..],
+        modq::reciprocal(f[p], q, b1, b2),
+        q,
+        b1,
+        b2,
+    );
     smaller_mask(0, d);
     r
 }

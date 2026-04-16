@@ -48,8 +48,7 @@ macro_rules! serde_json_test {
                     $ct_size * 2,
                     "hex length mismatch"
                 );
-                let ct2: Ciphertext<$params> =
-                    serde_json::from_str(&json).expect("deserialize CT");
+                let ct2: Ciphertext<$params> = serde_json::from_str(&json).expect("deserialize CT");
                 assert_eq!(ct, ct2);
             }
 
@@ -61,7 +60,11 @@ macro_rules! serde_json_test {
                 let json = serde_json::to_string(&ss).expect("serialize SS");
                 let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse");
                 assert!(parsed.is_string(), "SS should serialize as hex string");
-                assert_eq!(parsed.as_str().expect("str").len(), 64, "hex length mismatch");
+                assert_eq!(
+                    parsed.as_str().expect("str").len(),
+                    64,
+                    "hex length mismatch"
+                );
                 let ss2: SharedSecret<$params> =
                     serde_json::from_str(&json).expect("deserialize SS");
                 assert!(ss == ss2, "SS must match after JSON roundtrip");

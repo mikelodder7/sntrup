@@ -21,11 +21,17 @@ macro_rules! implicit_rejection_test {
             let ct_bad = Ciphertext::try_from(ct_bytes.as_slice()).expect("CT size");
 
             let ss_decap = dk.decapsulate(&ct_bad);
-            assert!(ss_encap != ss_decap, "corrupted CT must produce different key");
+            assert!(
+                ss_encap != ss_decap,
+                "corrupted CT must produce different key"
+            );
 
             // Deterministic: same corrupted CT + SK always produces same key
             let ss_decap2 = dk.decapsulate(&ct_bad);
-            assert!(ss_decap == ss_decap2, "repeated decap must be deterministic");
+            assert!(
+                ss_decap == ss_decap2,
+                "repeated decap must be deterministic"
+            );
         }
     };
 }

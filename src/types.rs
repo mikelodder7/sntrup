@@ -399,10 +399,7 @@ impl<P: SntrupParams> SntrupKem<P> {
 #[cfg(feature = "ecap")]
 impl<P: SntrupParams> EncapsulationKey<P> {
     /// Encapsulate: produce a ciphertext and shared secret.
-    pub fn encapsulate(
-        &self,
-        rng: &mut impl rand::CryptoRng,
-    ) -> (Ciphertext<P>, SharedSecret<P>) {
+    pub fn encapsulate(&self, rng: &mut impl rand::CryptoRng) -> (Ciphertext<P>, SharedSecret<P>) {
         let (ct, ss) = crate::kem::encaps(&self.bytes, P::params(), rng);
         (Ciphertext::from_vec(ct), SharedSecret::from_vec(ss))
     }

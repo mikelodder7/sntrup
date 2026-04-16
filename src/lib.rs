@@ -55,8 +55,8 @@ mod zx;
 
 pub use error::Error;
 pub use params::{
-    Sntrup1013Params, Sntrup1277Params, Sntrup653Params, Sntrup761Params, Sntrup857Params,
-    Sntrup953Params, SntrupParams,
+    Sntrup653Params, Sntrup761Params, Sntrup857Params, Sntrup953Params, Sntrup1013Params,
+    Sntrup1277Params, SntrupParams,
 };
 pub use types::{Ciphertext, DecapsulationKey, EncapsulationKey, SharedSecret, SntrupKem};
 
@@ -100,17 +100,13 @@ pub mod sntrup653 {
 
     /// Generate an sntrup653 key pair.
     #[cfg(feature = "kgen")]
-    pub fn generate_key(
-        rng: &mut impl rand::CryptoRng,
-    ) -> (EncapsulationKey, DecapsulationKey) {
+    pub fn generate_key(rng: &mut impl rand::CryptoRng) -> (EncapsulationKey, DecapsulationKey) {
         crate::Sntrup653::generate_key(rng)
     }
 
     /// Generate an sntrup653 key pair deterministically from a 32-byte seed.
     #[cfg(feature = "kgen")]
-    pub fn generate_key_deterministic(
-        seed: &[u8; 32],
-    ) -> (EncapsulationKey, DecapsulationKey) {
+    pub fn generate_key_deterministic(seed: &[u8; 32]) -> (EncapsulationKey, DecapsulationKey) {
         crate::Sntrup653::generate_key_deterministic(seed)
     }
 }
@@ -137,17 +133,13 @@ pub mod sntrup761 {
 
     /// Generate an sntrup761 key pair.
     #[cfg(feature = "kgen")]
-    pub fn generate_key(
-        rng: &mut impl rand::CryptoRng,
-    ) -> (EncapsulationKey, DecapsulationKey) {
+    pub fn generate_key(rng: &mut impl rand::CryptoRng) -> (EncapsulationKey, DecapsulationKey) {
         crate::Sntrup761::generate_key(rng)
     }
 
     /// Generate an sntrup761 key pair deterministically from a 32-byte seed.
     #[cfg(feature = "kgen")]
-    pub fn generate_key_deterministic(
-        seed: &[u8; 32],
-    ) -> (EncapsulationKey, DecapsulationKey) {
+    pub fn generate_key_deterministic(seed: &[u8; 32]) -> (EncapsulationKey, DecapsulationKey) {
         crate::Sntrup761::generate_key_deterministic(seed)
     }
 }
@@ -174,17 +166,13 @@ pub mod sntrup857 {
 
     /// Generate an sntrup857 key pair.
     #[cfg(feature = "kgen")]
-    pub fn generate_key(
-        rng: &mut impl rand::CryptoRng,
-    ) -> (EncapsulationKey, DecapsulationKey) {
+    pub fn generate_key(rng: &mut impl rand::CryptoRng) -> (EncapsulationKey, DecapsulationKey) {
         crate::Sntrup857::generate_key(rng)
     }
 
     /// Generate an sntrup857 key pair deterministically from a 32-byte seed.
     #[cfg(feature = "kgen")]
-    pub fn generate_key_deterministic(
-        seed: &[u8; 32],
-    ) -> (EncapsulationKey, DecapsulationKey) {
+    pub fn generate_key_deterministic(seed: &[u8; 32]) -> (EncapsulationKey, DecapsulationKey) {
         crate::Sntrup857::generate_key_deterministic(seed)
     }
 }
@@ -211,17 +199,13 @@ pub mod sntrup953 {
 
     /// Generate an sntrup953 key pair.
     #[cfg(feature = "kgen")]
-    pub fn generate_key(
-        rng: &mut impl rand::CryptoRng,
-    ) -> (EncapsulationKey, DecapsulationKey) {
+    pub fn generate_key(rng: &mut impl rand::CryptoRng) -> (EncapsulationKey, DecapsulationKey) {
         crate::Sntrup953::generate_key(rng)
     }
 
     /// Generate an sntrup953 key pair deterministically from a 32-byte seed.
     #[cfg(feature = "kgen")]
-    pub fn generate_key_deterministic(
-        seed: &[u8; 32],
-    ) -> (EncapsulationKey, DecapsulationKey) {
+    pub fn generate_key_deterministic(seed: &[u8; 32]) -> (EncapsulationKey, DecapsulationKey) {
         crate::Sntrup953::generate_key_deterministic(seed)
     }
 }
@@ -248,17 +232,13 @@ pub mod sntrup1013 {
 
     /// Generate an sntrup1013 key pair.
     #[cfg(feature = "kgen")]
-    pub fn generate_key(
-        rng: &mut impl rand::CryptoRng,
-    ) -> (EncapsulationKey, DecapsulationKey) {
+    pub fn generate_key(rng: &mut impl rand::CryptoRng) -> (EncapsulationKey, DecapsulationKey) {
         crate::Sntrup1013::generate_key(rng)
     }
 
     /// Generate an sntrup1013 key pair deterministically from a 32-byte seed.
     #[cfg(feature = "kgen")]
-    pub fn generate_key_deterministic(
-        seed: &[u8; 32],
-    ) -> (EncapsulationKey, DecapsulationKey) {
+    pub fn generate_key_deterministic(seed: &[u8; 32]) -> (EncapsulationKey, DecapsulationKey) {
         crate::Sntrup1013::generate_key_deterministic(seed)
     }
 }
@@ -285,17 +265,13 @@ pub mod sntrup1277 {
 
     /// Generate an sntrup1277 key pair.
     #[cfg(feature = "kgen")]
-    pub fn generate_key(
-        rng: &mut impl rand::CryptoRng,
-    ) -> (EncapsulationKey, DecapsulationKey) {
+    pub fn generate_key(rng: &mut impl rand::CryptoRng) -> (EncapsulationKey, DecapsulationKey) {
         crate::Sntrup1277::generate_key(rng)
     }
 
     /// Generate an sntrup1277 key pair deterministically from a 32-byte seed.
     #[cfg(feature = "kgen")]
-    pub fn generate_key_deterministic(
-        seed: &[u8; 32],
-    ) -> (EncapsulationKey, DecapsulationKey) {
+    pub fn generate_key_deterministic(seed: &[u8; 32]) -> (EncapsulationKey, DecapsulationKey) {
         crate::Sntrup1277::generate_key_deterministic(seed)
     }
 }
