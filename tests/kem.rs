@@ -6,6 +6,7 @@ use sntrup::*;
 // Implicit rejection: corrupted CT still returns a key, but a different one
 // ---------------------------------------------------------------------------
 
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 macro_rules! implicit_rejection_test {
     ($name:ident, $kem:ty, $ct_size:expr) => {
         #[test]
@@ -36,17 +37,24 @@ macro_rules! implicit_rejection_test {
     };
 }
 
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 implicit_rejection_test!(implicit_rejection_653, Sntrup653, 897);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 implicit_rejection_test!(implicit_rejection_761, Sntrup761, 1039);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 implicit_rejection_test!(implicit_rejection_857, Sntrup857, 1184);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 implicit_rejection_test!(implicit_rejection_953, Sntrup953, 1349);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 implicit_rejection_test!(implicit_rejection_1013, Sntrup1013, 1455);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 implicit_rejection_test!(implicit_rejection_1277, Sntrup1277, 1847);
 
 // ---------------------------------------------------------------------------
 // Wrong secret key gives different shared secret
 // ---------------------------------------------------------------------------
 
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 macro_rules! wrong_sk_test {
     ($name:ident, $kem:ty) => {
         #[test]
@@ -61,17 +69,24 @@ macro_rules! wrong_sk_test {
     };
 }
 
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 wrong_sk_test!(wrong_sk_653, Sntrup653);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 wrong_sk_test!(wrong_sk_761, Sntrup761);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 wrong_sk_test!(wrong_sk_857, Sntrup857);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 wrong_sk_test!(wrong_sk_953, Sntrup953);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 wrong_sk_test!(wrong_sk_1013, Sntrup1013);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 wrong_sk_test!(wrong_sk_1277, Sntrup1277);
 
 // ---------------------------------------------------------------------------
 // Constant-time decapsulate always returns SS_BYTES
 // ---------------------------------------------------------------------------
 
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 macro_rules! constant_time_test {
     ($name:ident, $kem:ty, $ct_size:expr) => {
         #[test]
@@ -91,17 +106,24 @@ macro_rules! constant_time_test {
     };
 }
 
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 constant_time_test!(constant_time_653, Sntrup653, 897);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 constant_time_test!(constant_time_761, Sntrup761, 1039);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 constant_time_test!(constant_time_857, Sntrup857, 1184);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 constant_time_test!(constant_time_953, Sntrup953, 1349);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 constant_time_test!(constant_time_1013, Sntrup1013, 1455);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 constant_time_test!(constant_time_1277, Sntrup1277, 1847);
 
 // ---------------------------------------------------------------------------
 // Deterministic keygen from seed
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "kgen")]
 macro_rules! deterministic_keygen_test {
     ($name:ident, $kem:ty) => {
         #[test]
@@ -119,17 +141,24 @@ macro_rules! deterministic_keygen_test {
     };
 }
 
+#[cfg(feature = "kgen")]
 deterministic_keygen_test!(deterministic_keygen_653, Sntrup653);
+#[cfg(feature = "kgen")]
 deterministic_keygen_test!(deterministic_keygen_761, Sntrup761);
+#[cfg(feature = "kgen")]
 deterministic_keygen_test!(deterministic_keygen_857, Sntrup857);
+#[cfg(feature = "kgen")]
 deterministic_keygen_test!(deterministic_keygen_953, Sntrup953);
+#[cfg(feature = "kgen")]
 deterministic_keygen_test!(deterministic_keygen_1013, Sntrup1013);
+#[cfg(feature = "kgen")]
 deterministic_keygen_test!(deterministic_keygen_1277, Sntrup1277);
 
 // ---------------------------------------------------------------------------
 // Extract encapsulation key from decapsulation key
 // ---------------------------------------------------------------------------
 
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 macro_rules! ek_from_dk_test {
     ($name:ident, $kem:ty) => {
         #[test]
@@ -147,11 +176,17 @@ macro_rules! ek_from_dk_test {
     };
 }
 
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 ek_from_dk_test!(ek_from_dk_653, Sntrup653);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 ek_from_dk_test!(ek_from_dk_761, Sntrup761);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 ek_from_dk_test!(ek_from_dk_857, Sntrup857);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 ek_from_dk_test!(ek_from_dk_953, Sntrup953);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 ek_from_dk_test!(ek_from_dk_1013, Sntrup1013);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 ek_from_dk_test!(ek_from_dk_1277, Sntrup1277);
 
 // ---------------------------------------------------------------------------
@@ -211,6 +246,7 @@ try_from_invalid_size_test!(
 // TryFrom / AsRef roundtrip
 // ---------------------------------------------------------------------------
 
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 macro_rules! bytes_roundtrip_test {
     ($name:ident, $kem:ty) => {
         #[test]
@@ -238,9 +274,15 @@ macro_rules! bytes_roundtrip_test {
     };
 }
 
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 bytes_roundtrip_test!(bytes_roundtrip_653, Sntrup653);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 bytes_roundtrip_test!(bytes_roundtrip_761, Sntrup761);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 bytes_roundtrip_test!(bytes_roundtrip_857, Sntrup857);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 bytes_roundtrip_test!(bytes_roundtrip_953, Sntrup953);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 bytes_roundtrip_test!(bytes_roundtrip_1013, Sntrup1013);
+#[cfg(all(feature = "kgen", feature = "ecap", feature = "dcap"))]
 bytes_roundtrip_test!(bytes_roundtrip_1277, Sntrup1277);

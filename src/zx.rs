@@ -47,15 +47,17 @@ pub mod random {
 
     /// Branchless constant-time min/max swap (djbsort int32_minmax).
     /// Operates on a slice with two indices to avoid borrow issues.
+    ///
+    /// Uses wrapping i32 subtraction (matching the original djbsort algorithm)
+    /// with an XOR fixup for overflow. The `>> 31` extracts the sign bit.
     #[inline(always)]
     #[allow(clippy::cast_possible_truncation)]
     fn int32_minmax(x: &mut [i32], i: usize, j: usize) {
         let ab = x[j] ^ x[i];
-        let mut c = (x[j] as i64) - (x[i] as i64);
-        c ^= (ab as i64) & (c ^ (x[j] as i64));
+        let mut c = x[j].wrapping_sub(x[i]);
+        c ^= ab & (c ^ x[j]);
         c >>= 31;
-        c &= ab as i64;
-        let c = c as i32;
+        c &= ab;
         x[i] ^= c;
         x[j] ^= c;
     }

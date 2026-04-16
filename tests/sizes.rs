@@ -1,4 +1,5 @@
 #![allow(missing_docs)]
+#![cfg(all(feature = "kgen", feature = "ecap"))]
 
 use sntrup::*;
 
