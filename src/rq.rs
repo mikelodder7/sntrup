@@ -135,78 +135,80 @@ fn mult_scalar(h: &mut [i16], f: &[i16], g: &[i8], params: &SntrupParameters) {
     clippy::needless_range_loop
 )]
 unsafe fn mult_avx2(h: &mut [i16], f: &[i16], g: &[i8], params: &SntrupParameters) {
-    use core::arch::x86_64::*;
+    unsafe {
+        use core::arch::x86_64::*;
 
-    let p = params.p;
-    let q = params.q;
-    let b1 = params.barrett1;
-    let b2 = params.barrett2;
+        let p = params.p;
+        let q = params.q;
+        let b1 = params.barrett1;
+        let b2 = params.barrett2;
 
-    // Pad to multiples of 8 so SIMD loops need no remainder handling
-    let g_pad_len = (p + 7) & !7;
-    let fg_pad_len = p + g_pad_len;
-    let fg_len = p * 2 - 1;
+        // Pad to multiples of 8 so SIMD loops need no remainder handling
+        let g_pad_len = (p + 7) & !7;
+        let fg_pad_len = p + g_pad_len;
+        let fg_len = p * 2 - 1;
 
-    let mut g_pad = vec![0i8; g_pad_len];
-    g_pad[..p].copy_from_slice(&g[..p]);
-    let mut fg = vec![0i32; fg_pad_len];
+        let mut g_pad = vec![0i8; g_pad_len];
+        g_pad[..p].copy_from_slice(&g[..p]);
+        let mut fg = vec![0i32; fg_pad_len];
 
-    // Accumulate f[j]*g[k] into fg[j+k]
-    for j in 0..p {
-        let fj = _mm256_set1_epi32(f[j] as i32);
-        let mut k = 0usize;
-        while k < g_pad_len {
-            let gb = _mm_loadl_epi64(g_pad.as_ptr().add(k) as *const __m128i);
-            let gk = _mm256_cvtepi8_epi32(gb);
-            let prod = _mm256_mullo_epi32(fj, gk);
-            let acc = _mm256_loadu_si256(fg.as_ptr().add(j + k) as *const __m256i);
-            _mm256_storeu_si256(
-                fg.as_mut_ptr().add(j + k) as *mut __m256i,
-                _mm256_add_epi32(acc, prod),
-            );
-            k += 8;
+        // Accumulate f[j]*g[k] into fg[j+k]
+        for j in 0..p {
+            let fj = _mm256_set1_epi32(f[j] as i32);
+            let mut k = 0usize;
+            while k < g_pad_len {
+                let gb = _mm_loadl_epi64(g_pad.as_ptr().add(k) as *const __m128i);
+                let gk = _mm256_cvtepi8_epi32(gb);
+                let prod = _mm256_mullo_epi32(fj, gk);
+                let acc = _mm256_loadu_si256(fg.as_ptr().add(j + k) as *const __m256i);
+                _mm256_storeu_si256(
+                    fg.as_mut_ptr().add(j + k) as *mut __m256i,
+                    _mm256_add_epi32(acc, prod),
+                );
+                k += 8;
+            }
         }
+
+        // Vectorized Barrett freeze: i32 -> i16
+        let qv = _mm256_set1_epi32(q);
+        let kb1 = _mm256_set1_epi32(b1);
+        let kb2 = _mm256_set1_epi32(b2);
+        let k134m = _mm256_set1_epi32(134_217_728);
+
+        let mut fg16 = vec![0i16; fg_len];
+        let mut i = 0usize;
+        while i + 16 <= fg_len {
+            let a0 = _mm256_loadu_si256(fg.as_ptr().add(i) as *const __m256i);
+            let a1 = _mm256_loadu_si256(fg.as_ptr().add(i + 8) as *const __m256i);
+
+            // freeze(a) = a - Q*((b1*a)>>20) then b - Q*((b2*b+134M)>>28)
+            let t = _mm256_srai_epi32(_mm256_mullo_epi32(a0, kb1), 20);
+            let b0 = _mm256_sub_epi32(a0, _mm256_mullo_epi32(t, qv));
+            let t = _mm256_srai_epi32(_mm256_add_epi32(_mm256_mullo_epi32(b0, kb2), k134m), 28);
+            let r0 = _mm256_sub_epi32(b0, _mm256_mullo_epi32(t, qv));
+
+            let t = _mm256_srai_epi32(_mm256_mullo_epi32(a1, kb1), 20);
+            let b1v = _mm256_sub_epi32(a1, _mm256_mullo_epi32(t, qv));
+            let t = _mm256_srai_epi32(_mm256_add_epi32(_mm256_mullo_epi32(b1v, kb2), k134m), 28);
+            let r1 = _mm256_sub_epi32(b1v, _mm256_mullo_epi32(t, qv));
+
+            // Pack 8+8 i32 -> 16 i16 and fix AVX2 lane ordering
+            let packed = _mm256_permute4x64_epi64(_mm256_packs_epi32(r0, r1), 0xD8);
+            _mm256_storeu_si256(fg16.as_mut_ptr().add(i) as *mut __m256i, packed);
+            i += 16;
+        }
+        while i < fg_len {
+            fg16[i] = modq::freeze(fg[i], q, b1, b2);
+            i += 1;
+        }
+
+        // Reduction (scalar -- sequential dependencies prevent vectorization)
+        for i in (p..(p * 2) - 1).rev() {
+            fg16[i - p] = modq::freeze(fg16[i - p] as i32 + fg16[i] as i32, q, b1, b2);
+            fg16[i - p + 1] = modq::freeze(fg16[i - p + 1] as i32 + fg16[i] as i32, q, b1, b2);
+        }
+        h[..p].copy_from_slice(&fg16[..p]);
     }
-
-    // Vectorized Barrett freeze: i32 -> i16
-    let qv = _mm256_set1_epi32(q);
-    let kb1 = _mm256_set1_epi32(b1);
-    let kb2 = _mm256_set1_epi32(b2);
-    let k134m = _mm256_set1_epi32(134_217_728);
-
-    let mut fg16 = vec![0i16; fg_len];
-    let mut i = 0usize;
-    while i + 16 <= fg_len {
-        let a0 = _mm256_loadu_si256(fg.as_ptr().add(i) as *const __m256i);
-        let a1 = _mm256_loadu_si256(fg.as_ptr().add(i + 8) as *const __m256i);
-
-        // freeze(a) = a - Q*((b1*a)>>20) then b - Q*((b2*b+134M)>>28)
-        let t = _mm256_srai_epi32(_mm256_mullo_epi32(a0, kb1), 20);
-        let b0 = _mm256_sub_epi32(a0, _mm256_mullo_epi32(t, qv));
-        let t = _mm256_srai_epi32(_mm256_add_epi32(_mm256_mullo_epi32(b0, kb2), k134m), 28);
-        let r0 = _mm256_sub_epi32(b0, _mm256_mullo_epi32(t, qv));
-
-        let t = _mm256_srai_epi32(_mm256_mullo_epi32(a1, kb1), 20);
-        let b1v = _mm256_sub_epi32(a1, _mm256_mullo_epi32(t, qv));
-        let t = _mm256_srai_epi32(_mm256_add_epi32(_mm256_mullo_epi32(b1v, kb2), k134m), 28);
-        let r1 = _mm256_sub_epi32(b1v, _mm256_mullo_epi32(t, qv));
-
-        // Pack 8+8 i32 -> 16 i16 and fix AVX2 lane ordering
-        let packed = _mm256_permute4x64_epi64(_mm256_packs_epi32(r0, r1), 0xD8);
-        _mm256_storeu_si256(fg16.as_mut_ptr().add(i) as *mut __m256i, packed);
-        i += 16;
-    }
-    while i < fg_len {
-        fg16[i] = modq::freeze(fg[i], q, b1, b2);
-        i += 1;
-    }
-
-    // Reduction (scalar -- sequential dependencies prevent vectorization)
-    for i in (p..(p * 2) - 1).rev() {
-        fg16[i - p] = modq::freeze(fg16[i - p] as i32 + fg16[i] as i32, q, b1, b2);
-        fg16[i - p + 1] = modq::freeze(fg16[i - p + 1] as i32 + fg16[i] as i32, q, b1, b2);
-    }
-    h[..p].copy_from_slice(&fg16[..p]);
 }
 
 /// Column-major schoolbook multiplication with NEON.

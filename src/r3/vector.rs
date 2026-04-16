@@ -46,29 +46,31 @@ fn swap_scalar(x: &mut [i8], y: &mut [i8], n: usize, mask: isize) {
 ))]
 #[target_feature(enable = "avx2")]
 unsafe fn swap_avx2(x: &mut [i8], y: &mut [i8], n: usize, mask: isize) {
-    use core::arch::x86_64::*;
-    let cv = _mm256_set1_epi8(mask as i8);
-    let mut i = 0usize;
-    while i + 32 <= n {
-        let xv = _mm256_loadu_si256(x.as_ptr().add(i) as *const __m256i);
-        let yv = _mm256_loadu_si256(y.as_ptr().add(i) as *const __m256i);
-        let t = _mm256_and_si256(cv, _mm256_xor_si256(xv, yv));
-        _mm256_storeu_si256(
-            x.as_mut_ptr().add(i) as *mut __m256i,
-            _mm256_xor_si256(xv, t),
-        );
-        _mm256_storeu_si256(
-            y.as_mut_ptr().add(i) as *mut __m256i,
-            _mm256_xor_si256(yv, t),
-        );
-        i += 32;
-    }
-    let c = mask as i8;
-    while i < n {
-        let t = c & (x[i] ^ y[i]);
-        x[i] ^= t;
-        y[i] ^= t;
-        i += 1;
+    unsafe {
+        use core::arch::x86_64::*;
+        let cv = _mm256_set1_epi8(mask as i8);
+        let mut i = 0usize;
+        while i + 32 <= n {
+            let xv = _mm256_loadu_si256(x.as_ptr().add(i) as *const __m256i);
+            let yv = _mm256_loadu_si256(y.as_ptr().add(i) as *const __m256i);
+            let t = _mm256_and_si256(cv, _mm256_xor_si256(xv, yv));
+            _mm256_storeu_si256(
+                x.as_mut_ptr().add(i) as *mut __m256i,
+                _mm256_xor_si256(xv, t),
+            );
+            _mm256_storeu_si256(
+                y.as_mut_ptr().add(i) as *mut __m256i,
+                _mm256_xor_si256(yv, t),
+            );
+            i += 32;
+        }
+        let c = mask as i8;
+        while i < n {
+            let t = c & (x[i] ^ y[i]);
+            x[i] ^= t;
+            y[i] ^= t;
+            i += 1;
+        }
     }
 }
 
@@ -132,20 +134,22 @@ fn product_scalar(z: &mut [i8], n: usize, x: &[i8], c: i8) {
 ))]
 #[target_feature(enable = "avx2")]
 unsafe fn product_avx2(z: &mut [i8], n: usize, x: &[i8], c: i8) {
-    use core::arch::x86_64::*;
-    let cv = _mm256_set1_epi8(c);
-    let mut i = 0usize;
-    while i + 32 <= n {
-        let xv = _mm256_loadu_si256(x.as_ptr().add(i) as *const __m256i);
-        _mm256_storeu_si256(
-            z.as_mut_ptr().add(i) as *mut __m256i,
-            _mm256_sign_epi8(xv, cv),
-        );
-        i += 32;
-    }
-    while i < n {
-        z[i] = mod3::product(x[i], c);
-        i += 1;
+    unsafe {
+        use core::arch::x86_64::*;
+        let cv = _mm256_set1_epi8(c);
+        let mut i = 0usize;
+        while i + 32 <= n {
+            let xv = _mm256_loadu_si256(x.as_ptr().add(i) as *const __m256i);
+            _mm256_storeu_si256(
+                z.as_mut_ptr().add(i) as *mut __m256i,
+                _mm256_sign_epi8(xv, cv),
+            );
+            i += 32;
+        }
+        while i < n {
+            z[i] = mod3::product(x[i], c);
+            i += 1;
+        }
     }
 }
 
@@ -228,36 +232,38 @@ fn minus_product_shift_scalar(z: &mut [i8], n: usize, y: &[i8], c: i8) {
 ))]
 #[target_feature(enable = "avx2")]
 unsafe fn minus_product_shift_avx2(z: &mut [i8], n: usize, y: &[i8], c: i8) {
-    use core::arch::x86_64::*;
-    let cv = _mm256_set1_epi8(c);
-    let neg2 = _mm256_set1_epi8(-2);
-    let pos2 = _mm256_set1_epi8(2);
-    let three = _mm256_set1_epi8(3);
+    unsafe {
+        use core::arch::x86_64::*;
+        let cv = _mm256_set1_epi8(c);
+        let neg2 = _mm256_set1_epi8(-2);
+        let pos2 = _mm256_set1_epi8(2);
+        let three = _mm256_set1_epi8(3);
 
-    let mut j = (n - 2) as isize;
+        let mut j = (n - 2) as isize;
 
-    // Process 32 i8 elements at a time, backward
-    while j >= 31 {
-        let start = (j - 31) as usize;
-        let zv = _mm256_loadu_si256(z.as_ptr().add(start) as *const __m256i);
-        let yv = _mm256_loadu_si256(y.as_ptr().add(start) as *const __m256i);
-        let yc = _mm256_sign_epi8(yv, cv);
-        let r = _mm256_sub_epi8(zv, yc);
-        // Mod-3 fixup: r is in [-2, 2]
-        let add = _mm256_and_si256(three, _mm256_cmpeq_epi8(r, neg2));
-        let sub = _mm256_and_si256(three, _mm256_cmpeq_epi8(r, pos2));
-        let r = _mm256_add_epi8(_mm256_sub_epi8(r, sub), add);
-        // Store at offset +1 (the shift)
-        _mm256_storeu_si256(z.as_mut_ptr().add(start + 1) as *mut __m256i, r);
-        j -= 32;
+        // Process 32 i8 elements at a time, backward
+        while j >= 31 {
+            let start = (j - 31) as usize;
+            let zv = _mm256_loadu_si256(z.as_ptr().add(start) as *const __m256i);
+            let yv = _mm256_loadu_si256(y.as_ptr().add(start) as *const __m256i);
+            let yc = _mm256_sign_epi8(yv, cv);
+            let r = _mm256_sub_epi8(zv, yc);
+            // Mod-3 fixup: r is in [-2, 2]
+            let add = _mm256_and_si256(three, _mm256_cmpeq_epi8(r, neg2));
+            let sub = _mm256_and_si256(three, _mm256_cmpeq_epi8(r, pos2));
+            let r = _mm256_add_epi8(_mm256_sub_epi8(r, sub), add);
+            // Store at offset +1 (the shift)
+            _mm256_storeu_si256(z.as_mut_ptr().add(start + 1) as *mut __m256i, r);
+            j -= 32;
+        }
+
+        // Scalar remainder
+        while j >= 0 {
+            z[(j + 1) as usize] = mod3::minus_product(z[j as usize], y[j as usize], c);
+            j -= 1;
+        }
+        z[0] = 0;
     }
-
-    // Scalar remainder
-    while j >= 0 {
-        z[(j + 1) as usize] = mod3::minus_product(z[j as usize], y[j as usize], c);
-        j -= 1;
-    }
-    z[0] = 0;
 }
 
 /// NEON minus_product_shift for i8: 16 elements at a time, backward.

@@ -97,31 +97,33 @@ fn weightw_mask_scalar(r: &[i8], _p: usize, w: usize) -> i32 {
     clippy::cast_possible_wrap
 )]
 unsafe fn weightw_mask_avx2(r: &[i8], p: usize, w: usize) -> i32 {
-    use core::arch::x86_64::*;
-    let ones = _mm256_set1_epi8(1);
-    let mut acc = _mm256_setzero_si256();
-    let mut i = 0usize;
-    while i + 32 <= p {
-        let v = _mm256_loadu_si256(r.as_ptr().add(i) as *const __m256i);
-        let masked = _mm256_and_si256(v, ones);
-        acc = _mm256_add_epi8(acc, masked);
-        i += 32;
+    unsafe {
+        use core::arch::x86_64::*;
+        let ones = _mm256_set1_epi8(1);
+        let mut acc = _mm256_setzero_si256();
+        let mut i = 0usize;
+        while i + 32 <= p {
+            let v = _mm256_loadu_si256(r.as_ptr().add(i) as *const __m256i);
+            let masked = _mm256_and_si256(v, ones);
+            acc = _mm256_add_epi8(acc, masked);
+            i += 32;
+        }
+        // Horizontal sum: sad against zero gives sum of abs values in each 8-byte lane
+        let sad = _mm256_sad_epu8(acc, _mm256_setzero_si256());
+        // sad has 4 u64 lanes with partial sums
+        let lo = _mm256_castsi256_si128(sad);
+        let hi = _mm256_extracti128_si256(sad, 1);
+        let sum128 = _mm_add_epi64(lo, hi);
+        let sum_hi = _mm_srli_si128(sum128, 8);
+        let total = _mm_add_epi64(sum128, sum_hi);
+        let mut weight = _mm_cvtsi128_si64(total) as i32;
+        // Handle remainder
+        while i < p {
+            weight += (r[i] & 1) as i32;
+            i += 1;
+        }
+        int16_nonzero_mask((weight - w as i32) as i16)
     }
-    // Horizontal sum: sad against zero gives sum of abs values in each 8-byte lane
-    let sad = _mm256_sad_epu8(acc, _mm256_setzero_si256());
-    // sad has 4 u64 lanes with partial sums
-    let lo = _mm256_castsi256_si128(sad);
-    let hi = _mm256_extracti128_si256(sad, 1);
-    let sum128 = _mm_add_epi64(lo, hi);
-    let sum_hi = _mm_srli_si128(sum128, 8);
-    let total = _mm_add_epi64(sum128, sum_hi);
-    let mut weight = _mm_cvtsi128_si64(total) as i32;
-    // Handle remainder
-    while i < p {
-        weight += (r[i] & 1) as i32;
-        i += 1;
-    }
-    int16_nonzero_mask((weight - w as i32) as i16)
 }
 
 /// Count non-zero elements 16 at a time using NEON.
@@ -198,27 +200,29 @@ fn ciphertexts_diff_mask_scalar(a: &[u8], b: &[u8]) -> i32 {
 #[target_feature(enable = "avx2")]
 #[allow(unsafe_code, clippy::cast_possible_wrap, clippy::cast_sign_loss)]
 unsafe fn ciphertexts_diff_mask_avx2(a: &[u8], b: &[u8]) -> i32 {
-    use core::arch::x86_64::*;
-    let len = a.len().min(b.len());
-    let mut acc = _mm256_setzero_si256();
-    let mut i = 0usize;
-    while i + 32 <= len {
-        let av = _mm256_loadu_si256(a.as_ptr().add(i) as *const __m256i);
-        let bv = _mm256_loadu_si256(b.as_ptr().add(i) as *const __m256i);
-        acc = _mm256_or_si256(acc, _mm256_xor_si256(av, bv));
-        i += 32;
+    unsafe {
+        use core::arch::x86_64::*;
+        let len = a.len().min(b.len());
+        let mut acc = _mm256_setzero_si256();
+        let mut i = 0usize;
+        while i + 32 <= len {
+            let av = _mm256_loadu_si256(a.as_ptr().add(i) as *const __m256i);
+            let bv = _mm256_loadu_si256(b.as_ptr().add(i) as *const __m256i);
+            acc = _mm256_or_si256(acc, _mm256_xor_si256(av, bv));
+            i += 32;
+        }
+        // Horizontal OR reduction
+        let mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(acc, _mm256_setzero_si256()));
+        // mask has 32 bits: bit i is 1 if byte i of acc == 0
+        // If all bytes are zero (equal), mask == 0xFFFFFFFF
+        let mut diff: u16 = if mask as u32 != 0xFFFFFFFF { 1 } else { 0 };
+        // Handle remainder
+        while i < len {
+            diff |= (a[i] ^ b[i]) as u16;
+            i += 1;
+        }
+        int16_nonzero_mask(diff as i16)
     }
-    // Horizontal OR reduction
-    let mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(acc, _mm256_setzero_si256()));
-    // mask has 32 bits: bit i is 1 if byte i of acc == 0
-    // If all bytes are zero (equal), mask == 0xFFFFFFFF
-    let mut diff: u16 = if mask as u32 != 0xFFFFFFFF { 1 } else { 0 };
-    // Handle remainder
-    while i < len {
-        diff |= (a[i] ^ b[i]) as u16;
-        i += 1;
-    }
-    int16_nonzero_mask(diff as i16)
 }
 
 /// XOR-accumulate 16 bytes at a time, then horizontal OR.
