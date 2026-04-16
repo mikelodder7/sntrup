@@ -1,0 +1,151 @@
+name: sntrup
+
+on:
+  pull_request:
+    paths-ignore:
+      - README.md
+      - LICENSE-APACHE
+      - LICENSE-MIT
+  push:
+    branches: main
+    paths-ignore:
+      - README.md
+      - LICENSE-APACHE
+      - LICENSE-MIT
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
+  RUST_LOG_STYLE: always
+  RUSTFLAGS: -D warnings
+  RUSTDOCFLAGS: -D warnings
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - run: cargo build --features std,alloc,serde
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - run: cargo test --features std,alloc,serde --benches --release
+
+  feature-gates:
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: ""
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: no features
+            flags: "--no-default-features"
+          - name: kgen
+            flags: "--no-default-features --features kgen"
+          - name: ecap
+            flags: "--no-default-features --features ecap"
+          - name: dcap
+            flags: "--no-default-features --features dcap"
+          - name: kgen+ecap
+            flags: "--no-default-features --features kgen,ecap"
+          - name: kgen+dcap
+            flags: "--no-default-features --features kgen,dcap"
+          - name: ecap+dcap
+            flags: "--no-default-features --features ecap,dcap"
+          - name: kgen+ecap+dcap
+            flags: "--no-default-features --features kgen,ecap,dcap"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - name: Check (${{ matrix.name }})
+        run: cargo check ${{ matrix.flags }}
+      - name: Test (${{ matrix.name }})
+        run: cargo test ${{ matrix.flags }} --lib --tests
+
+  careful:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+      - uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall --no-confirm cargo-careful
+      - run: cargo careful test tests --features std,alloc,serde --release
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: clippy
+      - run: cargo clippy --features std,alloc,serde -- -D warnings
+
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: rustfmt
+      - run: cargo fmt -- --check
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - run: cargo doc --features std,alloc,serde
+
+  deps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+      - uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall --no-confirm cargo-udeps
+      - run: cargo udeps --all-targets --all-features
+
+  outdated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+      - uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall --no-confirm cargo-outdated
+      - run: cargo outdated --root-deps-only --ignore rand8,rand,sha2 --exit-code=1
+
+  pants:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+      - uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall --no-confirm cargo-pants
+      - run: cargo pants --loud --dev
