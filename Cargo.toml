@@ -1,6 +1,6 @@
 [package]
 name = "sntrup"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Michael Lodder <redmike7@gmail.com>"]
 license = "MIT OR Apache-2.0"
 keywords = ["cryptography", "hashing", "NTRU", "post-quantum"]
@@ -33,10 +33,10 @@ serdect = { version = "0.4", optional = true }
 thiserror = "2.0"
 zeroize = { version = "1", features = ["derive"] }
 
-[target.'cfg(any(target_arch = "aarch64", target_arch = "x86_64", target_arch = "x86"))'.dependencies]
+[target.'cfg(all(any(target_arch = "aarch64", target_arch = "x86_64", target_arch = "x86"), not(target_env = "msvc")))'.dependencies]
 sha2 = { version = "0.10", features = ["asm"] }
 
-[target.'cfg(not(any(target_arch = "aarch64", target_arch = "x86_64", target_arch = "x86")))'.dependencies]
+[target.'cfg(any(not(any(target_arch = "aarch64", target_arch = "x86_64", target_arch = "x86")), target_env = "msvc"))'.dependencies]
 sha2 = "0.10"
 
 [dev-dependencies]
