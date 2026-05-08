@@ -25,6 +25,8 @@ defaults:
 jobs:
   bench-x86_64:
     runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -C target-cpu=native
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -39,6 +41,8 @@ jobs:
 
   bench-aarch64:
     runs-on: ubuntu-24.04-arm
+    env:
+      RUSTFLAGS: -C target-cpu=native
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
