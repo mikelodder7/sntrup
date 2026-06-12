@@ -17,12 +17,14 @@ pub(crate) fn keygen(params: &SntrupParameters, rng: &mut impl CryptoRng) -> (Ve
 
     // Generate g and its reciprocal in R3
     let mut g = vec![0i8; p];
-    let gr = loop {
+    let mut gr = loop {
         zx::random::random_small(&mut g, rng);
-        let (mask, gr) = r3::reciprocal(&g, p);
+        let (mask, mut gr) = r3::reciprocal(&g, p);
         if mask == 0 {
             break gr;
         }
+        // Rejected reciprocal is still derived from the secret g — wipe it.
+        gr.zeroize();
     };
 
     // Generate f with Hamming weight w
@@ -38,6 +40,7 @@ pub(crate) fn keygen(params: &SntrupParameters, rng: &mut impl CryptoRng) -> (Ve
     // Zeroize secret intermediates
     f.zeroize();
     g.zeroize();
+    gr.zeroize();
     rho.zeroize();
 
     result

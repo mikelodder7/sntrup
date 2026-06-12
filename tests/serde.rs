@@ -91,6 +91,42 @@ macro_rules! serde_json_test {
     };
 }
 
+mod reject_malformed_input {
+    use super::*;
+
+    /// Inputs shorter than the expected size must be rejected, not zero-padded.
+    #[test]
+    fn short_input_rejected() {
+        let json = "\"deadbeef\""; // 4 bytes — far shorter than any expected size
+        assert!(
+            serde_json::from_str::<EncapsulationKey<Sntrup761Params>>(json).is_err(),
+            "short EncapsulationKey input must be rejected, not zero-padded"
+        );
+        assert!(
+            serde_json::from_str::<DecapsulationKey<Sntrup761Params>>(json).is_err(),
+            "short DecapsulationKey input must be rejected, not zero-padded"
+        );
+        assert!(
+            serde_json::from_str::<Ciphertext<Sntrup761Params>>(json).is_err(),
+            "short Ciphertext input must be rejected, not zero-padded"
+        );
+        assert!(
+            serde_json::from_str::<SharedSecret<Sntrup761Params>>(json).is_err(),
+            "short SharedSecret input must be rejected, not zero-padded"
+        );
+    }
+
+    /// Empty input must be rejected for all four types.
+    #[test]
+    fn empty_input_rejected() {
+        let json = "\"\"";
+        assert!(serde_json::from_str::<EncapsulationKey<Sntrup761Params>>(json).is_err());
+        assert!(serde_json::from_str::<DecapsulationKey<Sntrup761Params>>(json).is_err());
+        assert!(serde_json::from_str::<Ciphertext<Sntrup761Params>>(json).is_err());
+        assert!(serde_json::from_str::<SharedSecret<Sntrup761Params>>(json).is_err());
+    }
+}
+
 serde_json_test!(serde_653, Sntrup653, Sntrup653Params, 994, 897);
 serde_json_test!(serde_761, Sntrup761, Sntrup761Params, 1158, 1039);
 serde_json_test!(serde_857, Sntrup857, Sntrup857Params, 1322, 1184);

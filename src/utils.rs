@@ -211,11 +211,13 @@ unsafe fn ciphertexts_diff_mask_avx2(a: &[u8], b: &[u8]) -> i32 {
             acc = _mm256_or_si256(acc, _mm256_xor_si256(av, bv));
             i += 32;
         }
-        // Horizontal OR reduction
-        let mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(acc, _mm256_setzero_si256()));
-        // mask has 32 bits: bit i is 1 if byte i of acc == 0
-        // If all bytes are zero (equal), mask == 0xFFFFFFFF
-        let mut diff: u16 = if mask as u32 != 0xFFFFFFFF { 1 } else { 0 };
+        // Horizontal OR reduction.
+        // movemask bit i is 1 iff byte i of acc == 0; mask == 0xFFFFFFFF iff equal.
+        // Collapse to 0/1 branchlessly — a source-level branch here would leak,
+        // via the branch predictor, whether the ciphertexts matched (the secret
+        // the implicit-rejection comparison must hide).
+        let inv = !(_mm256_movemask_epi8(_mm256_cmpeq_epi8(acc, _mm256_setzero_si256())) as u32);
+        let mut diff: u16 = ((inv | inv.wrapping_neg()) >> 31) as u16;
         // Handle remainder
         while i < len {
             diff |= (a[i] ^ b[i]) as u16;

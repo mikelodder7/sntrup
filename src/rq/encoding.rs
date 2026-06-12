@@ -259,11 +259,18 @@ pub fn rq_decode(c: &[u8], params: &SntrupParameters) -> Vec<i16> {
 
     let m = vec![q_u16; p];
     let mut r = vec![0u16; p];
-    // Use a buffer large enough for the largest pk_size across all parameter sets
-    let len = c.len().min(params.pk_size);
-    let mut s = vec![0u8; params.pk_size];
-    s[..len].copy_from_slice(&c[..len]);
-    decode(&mut r, &s, &m, p);
+    // Callers pass exactly `pk_size` bytes, so borrow directly on the hot path.
+    // Only allocate-and-pad if the input is short (defensive; never happens via
+    // the public API, where `EncapsulationKey::try_from` enforces the size).
+    let mut padded;
+    let s: &[u8] = if c.len() >= params.pk_size {
+        &c[..params.pk_size]
+    } else {
+        padded = vec![0u8; params.pk_size];
+        padded[..c.len()].copy_from_slice(c);
+        &padded
+    };
+    decode(&mut r, s, &m, p);
     let mut f = vec![0i16; p];
     for (fi, &ri) in f.iter_mut().zip(r.iter()) {
         *fi = modq::freeze(ri as i32 - q12, q, b1, b2);
@@ -298,10 +305,18 @@ pub fn rounded_decode(c: &[u8], params: &SntrupParameters) -> Vec<i16> {
 
     let m = vec![q_rounded; p];
     let mut r = vec![0u16; p];
-    let len = c.len().min(params.rounded_encode_size);
-    let mut s = vec![0u8; params.rounded_encode_size];
-    s[..len].copy_from_slice(&c[..len]);
-    decode(&mut r, &s, &m, p);
+    // Callers pass exactly `rounded_encode_size` bytes, so borrow directly on the
+    // hot path. Only allocate-and-pad if the input is short (defensive; never
+    // happens via the public API, where `Ciphertext::try_from` enforces the size).
+    let mut padded;
+    let s: &[u8] = if c.len() >= params.rounded_encode_size {
+        &c[..params.rounded_encode_size]
+    } else {
+        padded = vec![0u8; params.rounded_encode_size];
+        padded[..c.len()].copy_from_slice(c);
+        &padded
+    };
+    decode(&mut r, s, &m, p);
     let mut f = vec![0i16; p];
     for (fi, &ri) in f.iter_mut().zip(r.iter()) {
         *fi = modq::freeze(ri as i32 * 3 - q12, q, b1, b2);

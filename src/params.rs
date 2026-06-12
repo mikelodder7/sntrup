@@ -148,100 +148,78 @@ pub trait SntrupParams: sealed::Sealed + 'static {
     fn params() -> &'static SntrupParameters;
 }
 
-/// sntrup653 parameter marker (NIST Level 1, 128-bit security).
-///
-/// **Not recommended for production use.** Prefer [`Sntrup761Params`] or higher.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Sntrup653Params;
+/// Define a zero-sized parameter-set marker type and its sealed [`SntrupParams`] impl.
+macro_rules! sntrup_params_marker {
+    ($marker:ident, $name:literal, $pk:literal, $sk:literal, $ct:literal, $runtime:ident, $doc:expr) => {
+        #[doc = $doc]
+        #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+        pub struct $marker;
 
-impl sealed::Sealed for Sntrup653Params {}
+        impl sealed::Sealed for $marker {}
 
-impl SntrupParams for Sntrup653Params {
-    const NAME: &'static str = "sntrup653";
-    const PK_BYTES: usize = 994;
-    const SK_BYTES: usize = 1518;
-    const CT_BYTES: usize = 897;
-    fn params() -> &'static SntrupParameters {
-        &SNTRUP653
-    }
+        impl SntrupParams for $marker {
+            const NAME: &'static str = $name;
+            const PK_BYTES: usize = $pk;
+            const SK_BYTES: usize = $sk;
+            const CT_BYTES: usize = $ct;
+            fn params() -> &'static SntrupParameters {
+                &$runtime
+            }
+        }
+    };
 }
 
-/// sntrup761 parameter marker (NIST Level 2, 128-bit+ security).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Sntrup761Params;
-
-impl sealed::Sealed for Sntrup761Params {}
-
-impl SntrupParams for Sntrup761Params {
-    const NAME: &'static str = "sntrup761";
-    const PK_BYTES: usize = 1158;
-    const SK_BYTES: usize = 1763;
-    const CT_BYTES: usize = 1039;
-    fn params() -> &'static SntrupParameters {
-        &SNTRUP761
-    }
-}
-
-/// sntrup857 parameter marker (NIST Level 3, 192-bit security).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Sntrup857Params;
-
-impl sealed::Sealed for Sntrup857Params {}
-
-impl SntrupParams for Sntrup857Params {
-    const NAME: &'static str = "sntrup857";
-    const PK_BYTES: usize = 1322;
-    const SK_BYTES: usize = 1999;
-    const CT_BYTES: usize = 1184;
-    fn params() -> &'static SntrupParameters {
-        &SNTRUP857
-    }
-}
-
-/// sntrup953 parameter marker (NIST Level 4, 192-bit+ security).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Sntrup953Params;
-
-impl sealed::Sealed for Sntrup953Params {}
-
-impl SntrupParams for Sntrup953Params {
-    const NAME: &'static str = "sntrup953";
-    const PK_BYTES: usize = 1505;
-    const SK_BYTES: usize = 2254;
-    const CT_BYTES: usize = 1349;
-    fn params() -> &'static SntrupParameters {
-        &SNTRUP953
-    }
-}
-
-/// sntrup1013 parameter marker (NIST Level 5, 256-bit security).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Sntrup1013Params;
-
-impl sealed::Sealed for Sntrup1013Params {}
-
-impl SntrupParams for Sntrup1013Params {
-    const NAME: &'static str = "sntrup1013";
-    const PK_BYTES: usize = 1623;
-    const SK_BYTES: usize = 2417;
-    const CT_BYTES: usize = 1455;
-    fn params() -> &'static SntrupParameters {
-        &SNTRUP1013
-    }
-}
-
-/// sntrup1277 parameter marker (NIST Level 5, 256-bit security).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Sntrup1277Params;
-
-impl sealed::Sealed for Sntrup1277Params {}
-
-impl SntrupParams for Sntrup1277Params {
-    const NAME: &'static str = "sntrup1277";
-    const PK_BYTES: usize = 2067;
-    const SK_BYTES: usize = 3059;
-    const CT_BYTES: usize = 1847;
-    fn params() -> &'static SntrupParameters {
-        &SNTRUP1277
-    }
-}
+sntrup_params_marker!(
+    Sntrup653Params,
+    "sntrup653",
+    994,
+    1518,
+    897,
+    SNTRUP653,
+    "sntrup653 parameter marker (NIST Level 1, 128-bit security).\n\n**Not recommended for production use.** Prefer [`Sntrup761Params`] or higher."
+);
+sntrup_params_marker!(
+    Sntrup761Params,
+    "sntrup761",
+    1158,
+    1763,
+    1039,
+    SNTRUP761,
+    "sntrup761 parameter marker (NIST Level 2, 128-bit+ security)."
+);
+sntrup_params_marker!(
+    Sntrup857Params,
+    "sntrup857",
+    1322,
+    1999,
+    1184,
+    SNTRUP857,
+    "sntrup857 parameter marker (NIST Level 3, 192-bit security)."
+);
+sntrup_params_marker!(
+    Sntrup953Params,
+    "sntrup953",
+    1505,
+    2254,
+    1349,
+    SNTRUP953,
+    "sntrup953 parameter marker (NIST Level 4, 192-bit+ security)."
+);
+sntrup_params_marker!(
+    Sntrup1013Params,
+    "sntrup1013",
+    1623,
+    2417,
+    1455,
+    SNTRUP1013,
+    "sntrup1013 parameter marker (NIST Level 5, 256-bit security)."
+);
+sntrup_params_marker!(
+    Sntrup1277Params,
+    "sntrup1277",
+    2067,
+    3059,
+    1847,
+    SNTRUP1277,
+    "sntrup1277 parameter marker (NIST Level 5, 256-bit security)."
+);

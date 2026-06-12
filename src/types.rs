@@ -48,41 +48,24 @@ pub struct SntrupKem<P: SntrupParams>(PhantomData<P>);
 // Internal constructors
 // ---------------------------------------------------------------------------
 
-impl<P: SntrupParams> EncapsulationKey<P> {
-    pub(crate) fn from_vec(bytes: Vec<u8>) -> Self {
-        Self {
-            bytes,
-            _marker: PhantomData,
+/// Internal `from_vec` constructor for a byte-wrapper type.
+macro_rules! impl_from_vec {
+    ($ty:ident) => {
+        impl<P: SntrupParams> $ty<P> {
+            pub(crate) fn from_vec(bytes: Vec<u8>) -> Self {
+                Self {
+                    bytes,
+                    _marker: PhantomData,
+                }
+            }
         }
-    }
+    };
 }
 
-impl<P: SntrupParams> DecapsulationKey<P> {
-    pub(crate) fn from_vec(bytes: Vec<u8>) -> Self {
-        Self {
-            bytes,
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<P: SntrupParams> Ciphertext<P> {
-    pub(crate) fn from_vec(bytes: Vec<u8>) -> Self {
-        Self {
-            bytes,
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<P: SntrupParams> SharedSecret<P> {
-    pub(crate) fn from_vec(bytes: Vec<u8>) -> Self {
-        Self {
-            bytes,
-            _marker: PhantomData,
-        }
-    }
-}
+impl_from_vec!(EncapsulationKey);
+impl_from_vec!(DecapsulationKey);
+impl_from_vec!(Ciphertext);
+impl_from_vec!(SharedSecret);
 
 // ---------------------------------------------------------------------------
 // DecapsulationKey: extract encapsulation key
@@ -143,144 +126,73 @@ impl<P: SntrupParams> core::fmt::Debug for SharedSecret<P> {
 // AsRef<[u8]>
 // ---------------------------------------------------------------------------
 
-impl<P: SntrupParams> AsRef<[u8]> for EncapsulationKey<P> {
-    fn as_ref(&self) -> &[u8] {
-        &self.bytes
-    }
+/// `AsRef<[u8]>` byte access for a wrapper type.
+macro_rules! impl_as_ref {
+    ($ty:ident) => {
+        impl<P: SntrupParams> AsRef<[u8]> for $ty<P> {
+            fn as_ref(&self) -> &[u8] {
+                &self.bytes
+            }
+        }
+    };
 }
 
-impl<P: SntrupParams> AsRef<[u8]> for DecapsulationKey<P> {
-    fn as_ref(&self) -> &[u8] {
-        &self.bytes
-    }
-}
-
-impl<P: SntrupParams> AsRef<[u8]> for Ciphertext<P> {
-    fn as_ref(&self) -> &[u8] {
-        &self.bytes
-    }
-}
-
-impl<P: SntrupParams> AsRef<[u8]> for SharedSecret<P> {
-    fn as_ref(&self) -> &[u8] {
-        &self.bytes
-    }
-}
+impl_as_ref!(EncapsulationKey);
+impl_as_ref!(DecapsulationKey);
+impl_as_ref!(Ciphertext);
+impl_as_ref!(SharedSecret);
 
 // ---------------------------------------------------------------------------
 // TryFrom<&[u8]>
 // ---------------------------------------------------------------------------
 
-impl<P: SntrupParams> TryFrom<&[u8]> for EncapsulationKey<P> {
-    type Error = Error;
-    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
-        if bytes.len() != P::PK_BYTES {
-            return Err(Error::InvalidSize {
-                expected: P::PK_BYTES,
-                actual: bytes.len(),
-            });
+/// Generate the `TryFrom` family (`&[u8]`, `Vec<u8>`, `&Vec<u8>`, `Box<[u8]>`)
+/// for a fixed-size wrapper type. The `&[u8]` impl is the single length-checked
+/// entry point; the owned variants delegate to it.
+macro_rules! impl_try_from {
+    ($ty:ident, $size:ident) => {
+        impl<P: SntrupParams> TryFrom<&[u8]> for $ty<P> {
+            type Error = Error;
+            fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+                if bytes.len() != P::$size {
+                    return Err(Error::InvalidSize {
+                        expected: P::$size,
+                        actual: bytes.len(),
+                    });
+                }
+                Ok(Self {
+                    bytes: bytes.to_vec(),
+                    _marker: PhantomData,
+                })
+            }
         }
-        Ok(Self {
-            bytes: bytes.to_vec(),
-            _marker: PhantomData,
-        })
-    }
-}
 
-impl<P: SntrupParams> TryFrom<&[u8]> for DecapsulationKey<P> {
-    type Error = Error;
-    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
-        if bytes.len() != P::SK_BYTES {
-            return Err(Error::InvalidSize {
-                expected: P::SK_BYTES,
-                actual: bytes.len(),
-            });
+        impl<P: SntrupParams> TryFrom<Vec<u8>> for $ty<P> {
+            type Error = Error;
+            fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
+                Self::try_from(bytes.as_slice())
+            }
         }
-        Ok(Self {
-            bytes: bytes.to_vec(),
-            _marker: PhantomData,
-        })
-    }
-}
 
-impl<P: SntrupParams> TryFrom<&[u8]> for Ciphertext<P> {
-    type Error = Error;
-    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
-        if bytes.len() != P::CT_BYTES {
-            return Err(Error::InvalidSize {
-                expected: P::CT_BYTES,
-                actual: bytes.len(),
-            });
+        impl<P: SntrupParams> TryFrom<&Vec<u8>> for $ty<P> {
+            type Error = Error;
+            fn try_from(bytes: &Vec<u8>) -> Result<Self, Self::Error> {
+                Self::try_from(bytes.as_slice())
+            }
         }
-        Ok(Self {
-            bytes: bytes.to_vec(),
-            _marker: PhantomData,
-        })
-    }
+
+        impl<P: SntrupParams> TryFrom<Box<[u8]>> for $ty<P> {
+            type Error = Error;
+            fn try_from(bytes: Box<[u8]>) -> Result<Self, Self::Error> {
+                Self::try_from(bytes.as_ref())
+            }
+        }
+    };
 }
 
-impl<P: SntrupParams> TryFrom<Vec<u8>> for EncapsulationKey<P> {
-    type Error = Error;
-    fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
-        Self::try_from(bytes.as_slice())
-    }
-}
-
-impl<P: SntrupParams> TryFrom<&Vec<u8>> for EncapsulationKey<P> {
-    type Error = Error;
-    fn try_from(bytes: &Vec<u8>) -> Result<Self, Self::Error> {
-        Self::try_from(bytes.as_slice())
-    }
-}
-
-impl<P: SntrupParams> TryFrom<Box<[u8]>> for EncapsulationKey<P> {
-    type Error = Error;
-    fn try_from(bytes: Box<[u8]>) -> Result<Self, Self::Error> {
-        Self::try_from(bytes.as_ref())
-    }
-}
-
-impl<P: SntrupParams> TryFrom<Vec<u8>> for DecapsulationKey<P> {
-    type Error = Error;
-    fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
-        Self::try_from(bytes.as_slice())
-    }
-}
-
-impl<P: SntrupParams> TryFrom<&Vec<u8>> for DecapsulationKey<P> {
-    type Error = Error;
-    fn try_from(bytes: &Vec<u8>) -> Result<Self, Self::Error> {
-        Self::try_from(bytes.as_slice())
-    }
-}
-
-impl<P: SntrupParams> TryFrom<Box<[u8]>> for DecapsulationKey<P> {
-    type Error = Error;
-    fn try_from(bytes: Box<[u8]>) -> Result<Self, Self::Error> {
-        Self::try_from(bytes.as_ref())
-    }
-}
-
-impl<P: SntrupParams> TryFrom<Vec<u8>> for Ciphertext<P> {
-    type Error = Error;
-    fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
-        Self::try_from(bytes.as_slice())
-    }
-}
-
-impl<P: SntrupParams> TryFrom<&Vec<u8>> for Ciphertext<P> {
-    type Error = Error;
-    fn try_from(bytes: &Vec<u8>) -> Result<Self, Self::Error> {
-        Self::try_from(bytes.as_slice())
-    }
-}
-
-impl<P: SntrupParams> TryFrom<Box<[u8]>> for Ciphertext<P> {
-    type Error = Error;
-    fn try_from(bytes: Box<[u8]>) -> Result<Self, Self::Error> {
-        Self::try_from(bytes.as_ref())
-    }
-}
+impl_try_from!(EncapsulationKey, PK_BYTES);
+impl_try_from!(DecapsulationKey, SK_BYTES);
+impl_try_from!(Ciphertext, CT_BYTES);
 
 // ---------------------------------------------------------------------------
 // PartialEq / Eq (EncapsulationKey, Ciphertext — non-secret, byte equality)
@@ -426,71 +338,43 @@ impl<P: SntrupParams> DecapsulationKey<P> {
 mod serde_impl {
     use super::*;
 
-    impl<P: SntrupParams> serde::Serialize for EncapsulationKey<P> {
-        fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-            serdect::slice::serialize_hex_lower_or_bin(&self.bytes, s)
-        }
+    /// Generate `Serialize`/`Deserialize` for a byte-wrapper type. Deserialization
+    /// validates that the decoded length matches the parameter set's fixed size,
+    /// rejecting (rather than silently zero-padding) short or oversized input.
+    macro_rules! impl_serde {
+        ($ty:ident, $size:ident) => {
+            impl<P: SntrupParams> serde::Serialize for $ty<P> {
+                fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                    serdect::slice::serialize_hex_lower_or_bin(&self.bytes, s)
+                }
+            }
+
+            impl<'de, P: SntrupParams> serde::Deserialize<'de> for $ty<P> {
+                fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                    let mut buf = vec![0u8; P::$size];
+                    let decoded = serdect::slice::deserialize_hex_or_bin(&mut buf, d)?;
+                    if decoded.len() != P::$size {
+                        return Err(serde::de::Error::invalid_length(
+                            decoded.len(),
+                            &concat!(
+                                stringify!($ty),
+                                " expects exactly P::",
+                                stringify!($size),
+                                " bytes"
+                            ),
+                        ));
+                    }
+                    Ok(Self {
+                        bytes: buf,
+                        _marker: PhantomData,
+                    })
+                }
+            }
+        };
     }
 
-    impl<'de, P: SntrupParams> serde::Deserialize<'de> for EncapsulationKey<P> {
-        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-            let mut buf = vec![0u8; P::PK_BYTES];
-            let _ = serdect::slice::deserialize_hex_or_bin(&mut buf, d)?;
-            Ok(Self {
-                bytes: buf,
-                _marker: PhantomData,
-            })
-        }
-    }
-
-    impl<P: SntrupParams> serde::Serialize for DecapsulationKey<P> {
-        fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-            serdect::slice::serialize_hex_lower_or_bin(&self.bytes, s)
-        }
-    }
-
-    impl<'de, P: SntrupParams> serde::Deserialize<'de> for DecapsulationKey<P> {
-        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-            let mut buf = vec![0u8; P::SK_BYTES];
-            let _ = serdect::slice::deserialize_hex_or_bin(&mut buf, d)?;
-            Ok(Self {
-                bytes: buf,
-                _marker: PhantomData,
-            })
-        }
-    }
-
-    impl<P: SntrupParams> serde::Serialize for Ciphertext<P> {
-        fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-            serdect::slice::serialize_hex_lower_or_bin(&self.bytes, s)
-        }
-    }
-
-    impl<'de, P: SntrupParams> serde::Deserialize<'de> for Ciphertext<P> {
-        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-            let mut buf = vec![0u8; P::CT_BYTES];
-            let _ = serdect::slice::deserialize_hex_or_bin(&mut buf, d)?;
-            Ok(Self {
-                bytes: buf,
-                _marker: PhantomData,
-            })
-        }
-    }
-
-    impl<P: SntrupParams> serde::Serialize for SharedSecret<P> {
-        fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-            serdect::slice::serialize_hex_lower_or_bin(&self.bytes, s)
-        }
-    }
-
-    impl<'de, P: SntrupParams> serde::Deserialize<'de> for SharedSecret<P> {
-        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-            let mut buf = vec![0u8; P::SS_BYTES];
-            let _ = serdect::slice::deserialize_hex_or_bin(&mut buf, d)?;
-            Ok(Self {
-                bytes: buf,
-                _marker: PhantomData,
-            })
-        }
-    }
+    impl_serde!(EncapsulationKey, PK_BYTES);
+    impl_serde!(DecapsulationKey, SK_BYTES);
+    impl_serde!(Ciphertext, CT_BYTES);
+    impl_serde!(SharedSecret, SS_BYTES);
 }

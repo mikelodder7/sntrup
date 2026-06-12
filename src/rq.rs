@@ -2,18 +2,8 @@ pub mod encoding;
 pub mod modq;
 mod vector;
 
+use crate::ct::{smaller_mask, swap_int};
 use crate::params::SntrupParameters;
-
-#[inline(always)]
-fn swap_int(x: isize, y: isize, mask: isize) -> (isize, isize) {
-    let t = mask & (x ^ y);
-    (x ^ t, y ^ t)
-}
-
-#[inline(always)]
-fn smaller_mask(x: isize, y: isize) -> isize {
-    (x - y) >> 31
-}
 
 #[allow(clippy::cast_possible_wrap)]
 pub fn reciprocal3(s: &[i8], params: &SntrupParameters) -> Vec<i16> {
@@ -59,7 +49,10 @@ pub fn reciprocal3(s: &[i8], params: &SntrupParameters) -> Vec<i16> {
         b1,
         b2,
     );
-    smaller_mask(0, d);
+    // Note: unlike r3::reciprocal, no invertibility check is returned here.
+    // For these parameter sets q is prime and x^p - x - 1 is irreducible mod q,
+    // so R/q is a field and the weight-w secret f is always invertible — the
+    // reciprocal never fails, so there is no failure mask to propagate.
     r
 }
 

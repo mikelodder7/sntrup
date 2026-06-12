@@ -1,16 +1,7 @@
 pub mod mod3;
 mod vector;
 
-#[inline(always)]
-fn swap_int(x: isize, y: isize, mask: isize) -> (isize, isize) {
-    let t = mask & (x ^ y);
-    (x ^ t, y ^ t)
-}
-
-#[inline(always)]
-fn smaller_mask(x: isize, y: isize) -> isize {
-    (x - y) >> 31
-}
+use crate::ct::{smaller_mask, swap_int};
 
 #[allow(clippy::cast_possible_wrap)]
 pub fn reciprocal(s: &[i8], p: usize) -> (isize, Vec<i8>) {

@@ -1,6 +1,6 @@
 [package]
 name = "sntrup"
-version = "0.2.1"
+version = "0.3.0"
 authors = ["Michael Lodder <redmike7@gmail.com>"]
 license = "MIT OR Apache-2.0"
 keywords = ["cryptography", "hashing", "NTRU", "post-quantum"]
@@ -30,14 +30,11 @@ subtle = "2"
 getrandom = { version = "0.4", optional = true }
 serde = { version = "1", optional = true, default-features = false }
 serdect = { version = "0.4", optional = true }
+# sha2 0.11 dropped the `asm` feature; hardware SHA acceleration is now selected
+# automatically per-target, so a single unconditional dependency suffices.
+sha2 = "0.11"
 thiserror = "2.0"
 zeroize = { version = "1", features = ["derive"] }
-
-[target.'cfg(all(any(target_arch = "aarch64", target_arch = "x86_64", target_arch = "x86"), not(target_env = "msvc")))'.dependencies]
-sha2 = { version = "0.10", features = ["asm"] }
-
-[target.'cfg(any(not(any(target_arch = "aarch64", target_arch = "x86_64", target_arch = "x86")), target_env = "msvc"))'.dependencies]
-sha2 = "0.10"
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }

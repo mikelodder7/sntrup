@@ -44,6 +44,7 @@
 //! - `dcap`: Decapsulation (default)
 //! - `serde`: Serde serialization support via `serdect`
 
+mod ct;
 mod error;
 mod kem;
 mod params;
@@ -76,202 +77,85 @@ pub type Sntrup1013 = SntrupKem<Sntrup1013Params>;
 /// sntrup1277 KEM (NIST Level 5, 256-bit security).
 pub type Sntrup1277 = SntrupKem<Sntrup1277Params>;
 
-/// sntrup653: NIST Level 1 (128-bit security), p=653, q=4621, w=288.
-///
-/// **Not recommended for production use.** Prefer [`sntrup761`] or higher.
-pub mod sntrup653 {
-    /// Public key size in bytes.
-    pub const PUBLIC_KEY_SIZE: usize = 994;
-    /// Secret key size in bytes.
-    pub const SECRET_KEY_SIZE: usize = 1518;
-    /// Ciphertext size in bytes.
-    pub const CIPHERTEXT_SIZE: usize = 897;
-    /// Shared secret size in bytes.
-    pub const SHARED_SECRET_SIZE: usize = crate::params::SS_BYTES;
+/// Define a per-parameter-set convenience module: size constants (sourced from
+/// the `SntrupParams` impl so they cannot drift), type aliases, and free
+/// `generate_key` / `generate_key_deterministic` functions.
+macro_rules! sntrup_module {
+    ($modname:ident, $params:ident, $kem:ident, $doc:expr) => {
+        #[doc = $doc]
+        pub mod $modname {
+            use crate::params::SntrupParams;
 
-    /// sntrup653 encapsulation key.
-    pub type EncapsulationKey = crate::EncapsulationKey<crate::Sntrup653Params>;
-    /// sntrup653 decapsulation key.
-    pub type DecapsulationKey = crate::DecapsulationKey<crate::Sntrup653Params>;
-    /// sntrup653 ciphertext.
-    pub type Ciphertext = crate::Ciphertext<crate::Sntrup653Params>;
-    /// sntrup653 shared secret.
-    pub type SharedSecret = crate::SharedSecret<crate::Sntrup653Params>;
+            /// Public key size in bytes.
+            pub const PUBLIC_KEY_SIZE: usize = crate::$params::PK_BYTES;
+            /// Secret key size in bytes.
+            pub const SECRET_KEY_SIZE: usize = crate::$params::SK_BYTES;
+            /// Ciphertext size in bytes.
+            pub const CIPHERTEXT_SIZE: usize = crate::$params::CT_BYTES;
+            /// Shared secret size in bytes.
+            pub const SHARED_SECRET_SIZE: usize = crate::params::SS_BYTES;
 
-    /// Generate an sntrup653 key pair.
-    #[cfg(feature = "kgen")]
-    pub fn generate_key(rng: &mut impl rand::CryptoRng) -> (EncapsulationKey, DecapsulationKey) {
-        crate::Sntrup653::generate_key(rng)
-    }
+            /// Encapsulation key for this parameter set.
+            pub type EncapsulationKey = crate::EncapsulationKey<crate::$params>;
+            /// Decapsulation key for this parameter set.
+            pub type DecapsulationKey = crate::DecapsulationKey<crate::$params>;
+            /// Ciphertext for this parameter set.
+            pub type Ciphertext = crate::Ciphertext<crate::$params>;
+            /// Shared secret for this parameter set.
+            pub type SharedSecret = crate::SharedSecret<crate::$params>;
 
-    /// Generate an sntrup653 key pair deterministically from a 32-byte seed.
-    #[cfg(feature = "kgen")]
-    pub fn generate_key_deterministic(seed: &[u8; 32]) -> (EncapsulationKey, DecapsulationKey) {
-        crate::Sntrup653::generate_key_deterministic(seed)
-    }
+            /// Generate a key pair for this parameter set.
+            #[cfg(feature = "kgen")]
+            pub fn generate_key(
+                rng: &mut impl rand::CryptoRng,
+            ) -> (EncapsulationKey, DecapsulationKey) {
+                crate::$kem::generate_key(rng)
+            }
+
+            /// Generate a key pair deterministically from a 32-byte seed.
+            #[cfg(feature = "kgen")]
+            pub fn generate_key_deterministic(
+                seed: &[u8; 32],
+            ) -> (EncapsulationKey, DecapsulationKey) {
+                crate::$kem::generate_key_deterministic(seed)
+            }
+        }
+    };
 }
 
-/// sntrup761: NIST Level 2 (128-bit+ security), p=761, q=4591, w=286. Used by OpenSSH.
-pub mod sntrup761 {
-    /// Public key size in bytes.
-    pub const PUBLIC_KEY_SIZE: usize = 1158;
-    /// Secret key size in bytes.
-    pub const SECRET_KEY_SIZE: usize = 1763;
-    /// Ciphertext size in bytes.
-    pub const CIPHERTEXT_SIZE: usize = 1039;
-    /// Shared secret size in bytes.
-    pub const SHARED_SECRET_SIZE: usize = crate::params::SS_BYTES;
-
-    /// sntrup761 encapsulation key.
-    pub type EncapsulationKey = crate::EncapsulationKey<crate::Sntrup761Params>;
-    /// sntrup761 decapsulation key.
-    pub type DecapsulationKey = crate::DecapsulationKey<crate::Sntrup761Params>;
-    /// sntrup761 ciphertext.
-    pub type Ciphertext = crate::Ciphertext<crate::Sntrup761Params>;
-    /// sntrup761 shared secret.
-    pub type SharedSecret = crate::SharedSecret<crate::Sntrup761Params>;
-
-    /// Generate an sntrup761 key pair.
-    #[cfg(feature = "kgen")]
-    pub fn generate_key(rng: &mut impl rand::CryptoRng) -> (EncapsulationKey, DecapsulationKey) {
-        crate::Sntrup761::generate_key(rng)
-    }
-
-    /// Generate an sntrup761 key pair deterministically from a 32-byte seed.
-    #[cfg(feature = "kgen")]
-    pub fn generate_key_deterministic(seed: &[u8; 32]) -> (EncapsulationKey, DecapsulationKey) {
-        crate::Sntrup761::generate_key_deterministic(seed)
-    }
-}
-
-/// sntrup857: NIST Level 3 (192-bit security), p=857, q=5167, w=322.
-pub mod sntrup857 {
-    /// Public key size in bytes.
-    pub const PUBLIC_KEY_SIZE: usize = 1322;
-    /// Secret key size in bytes.
-    pub const SECRET_KEY_SIZE: usize = 1999;
-    /// Ciphertext size in bytes.
-    pub const CIPHERTEXT_SIZE: usize = 1184;
-    /// Shared secret size in bytes.
-    pub const SHARED_SECRET_SIZE: usize = crate::params::SS_BYTES;
-
-    /// sntrup857 encapsulation key.
-    pub type EncapsulationKey = crate::EncapsulationKey<crate::Sntrup857Params>;
-    /// sntrup857 decapsulation key.
-    pub type DecapsulationKey = crate::DecapsulationKey<crate::Sntrup857Params>;
-    /// sntrup857 ciphertext.
-    pub type Ciphertext = crate::Ciphertext<crate::Sntrup857Params>;
-    /// sntrup857 shared secret.
-    pub type SharedSecret = crate::SharedSecret<crate::Sntrup857Params>;
-
-    /// Generate an sntrup857 key pair.
-    #[cfg(feature = "kgen")]
-    pub fn generate_key(rng: &mut impl rand::CryptoRng) -> (EncapsulationKey, DecapsulationKey) {
-        crate::Sntrup857::generate_key(rng)
-    }
-
-    /// Generate an sntrup857 key pair deterministically from a 32-byte seed.
-    #[cfg(feature = "kgen")]
-    pub fn generate_key_deterministic(seed: &[u8; 32]) -> (EncapsulationKey, DecapsulationKey) {
-        crate::Sntrup857::generate_key_deterministic(seed)
-    }
-}
-
-/// sntrup953: NIST Level 4 (192-bit+ security), p=953, q=6343, w=396.
-pub mod sntrup953 {
-    /// Public key size in bytes.
-    pub const PUBLIC_KEY_SIZE: usize = 1505;
-    /// Secret key size in bytes.
-    pub const SECRET_KEY_SIZE: usize = 2254;
-    /// Ciphertext size in bytes.
-    pub const CIPHERTEXT_SIZE: usize = 1349;
-    /// Shared secret size in bytes.
-    pub const SHARED_SECRET_SIZE: usize = crate::params::SS_BYTES;
-
-    /// sntrup953 encapsulation key.
-    pub type EncapsulationKey = crate::EncapsulationKey<crate::Sntrup953Params>;
-    /// sntrup953 decapsulation key.
-    pub type DecapsulationKey = crate::DecapsulationKey<crate::Sntrup953Params>;
-    /// sntrup953 ciphertext.
-    pub type Ciphertext = crate::Ciphertext<crate::Sntrup953Params>;
-    /// sntrup953 shared secret.
-    pub type SharedSecret = crate::SharedSecret<crate::Sntrup953Params>;
-
-    /// Generate an sntrup953 key pair.
-    #[cfg(feature = "kgen")]
-    pub fn generate_key(rng: &mut impl rand::CryptoRng) -> (EncapsulationKey, DecapsulationKey) {
-        crate::Sntrup953::generate_key(rng)
-    }
-
-    /// Generate an sntrup953 key pair deterministically from a 32-byte seed.
-    #[cfg(feature = "kgen")]
-    pub fn generate_key_deterministic(seed: &[u8; 32]) -> (EncapsulationKey, DecapsulationKey) {
-        crate::Sntrup953::generate_key_deterministic(seed)
-    }
-}
-
-/// sntrup1013: NIST Level 5 (256-bit security), p=1013, q=7177, w=448.
-pub mod sntrup1013 {
-    /// Public key size in bytes.
-    pub const PUBLIC_KEY_SIZE: usize = 1623;
-    /// Secret key size in bytes.
-    pub const SECRET_KEY_SIZE: usize = 2417;
-    /// Ciphertext size in bytes.
-    pub const CIPHERTEXT_SIZE: usize = 1455;
-    /// Shared secret size in bytes.
-    pub const SHARED_SECRET_SIZE: usize = crate::params::SS_BYTES;
-
-    /// sntrup1013 encapsulation key.
-    pub type EncapsulationKey = crate::EncapsulationKey<crate::Sntrup1013Params>;
-    /// sntrup1013 decapsulation key.
-    pub type DecapsulationKey = crate::DecapsulationKey<crate::Sntrup1013Params>;
-    /// sntrup1013 ciphertext.
-    pub type Ciphertext = crate::Ciphertext<crate::Sntrup1013Params>;
-    /// sntrup1013 shared secret.
-    pub type SharedSecret = crate::SharedSecret<crate::Sntrup1013Params>;
-
-    /// Generate an sntrup1013 key pair.
-    #[cfg(feature = "kgen")]
-    pub fn generate_key(rng: &mut impl rand::CryptoRng) -> (EncapsulationKey, DecapsulationKey) {
-        crate::Sntrup1013::generate_key(rng)
-    }
-
-    /// Generate an sntrup1013 key pair deterministically from a 32-byte seed.
-    #[cfg(feature = "kgen")]
-    pub fn generate_key_deterministic(seed: &[u8; 32]) -> (EncapsulationKey, DecapsulationKey) {
-        crate::Sntrup1013::generate_key_deterministic(seed)
-    }
-}
-
-/// sntrup1277: NIST Level 5 (256-bit security, extra margin), p=1277, q=7879, w=492.
-pub mod sntrup1277 {
-    /// Public key size in bytes.
-    pub const PUBLIC_KEY_SIZE: usize = 2067;
-    /// Secret key size in bytes.
-    pub const SECRET_KEY_SIZE: usize = 3059;
-    /// Ciphertext size in bytes.
-    pub const CIPHERTEXT_SIZE: usize = 1847;
-    /// Shared secret size in bytes.
-    pub const SHARED_SECRET_SIZE: usize = crate::params::SS_BYTES;
-
-    /// sntrup1277 encapsulation key.
-    pub type EncapsulationKey = crate::EncapsulationKey<crate::Sntrup1277Params>;
-    /// sntrup1277 decapsulation key.
-    pub type DecapsulationKey = crate::DecapsulationKey<crate::Sntrup1277Params>;
-    /// sntrup1277 ciphertext.
-    pub type Ciphertext = crate::Ciphertext<crate::Sntrup1277Params>;
-    /// sntrup1277 shared secret.
-    pub type SharedSecret = crate::SharedSecret<crate::Sntrup1277Params>;
-
-    /// Generate an sntrup1277 key pair.
-    #[cfg(feature = "kgen")]
-    pub fn generate_key(rng: &mut impl rand::CryptoRng) -> (EncapsulationKey, DecapsulationKey) {
-        crate::Sntrup1277::generate_key(rng)
-    }
-
-    /// Generate an sntrup1277 key pair deterministically from a 32-byte seed.
-    #[cfg(feature = "kgen")]
-    pub fn generate_key_deterministic(seed: &[u8; 32]) -> (EncapsulationKey, DecapsulationKey) {
-        crate::Sntrup1277::generate_key_deterministic(seed)
-    }
-}
+sntrup_module!(
+    sntrup653,
+    Sntrup653Params,
+    Sntrup653,
+    "sntrup653: NIST Level 1 (128-bit security), p=653, q=4621, w=288.\n\n**Not recommended for production use.** Prefer [`sntrup761`] or higher."
+);
+sntrup_module!(
+    sntrup761,
+    Sntrup761Params,
+    Sntrup761,
+    "sntrup761: NIST Level 2 (128-bit+ security), p=761, q=4591, w=286. Used by OpenSSH."
+);
+sntrup_module!(
+    sntrup857,
+    Sntrup857Params,
+    Sntrup857,
+    "sntrup857: NIST Level 3 (192-bit security), p=857, q=5167, w=322."
+);
+sntrup_module!(
+    sntrup953,
+    Sntrup953Params,
+    Sntrup953,
+    "sntrup953: NIST Level 4 (192-bit+ security), p=953, q=6343, w=396."
+);
+sntrup_module!(
+    sntrup1013,
+    Sntrup1013Params,
+    Sntrup1013,
+    "sntrup1013: NIST Level 5 (256-bit security), p=1013, q=7177, w=448."
+);
+sntrup_module!(
+    sntrup1277,
+    Sntrup1277Params,
+    Sntrup1277,
+    "sntrup1277: NIST Level 5 (256-bit security, extra margin), p=1277, q=7879, w=492."
+);

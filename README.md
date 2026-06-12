@@ -39,15 +39,6 @@ All key and ciphertext sizes are in bytes. Sizes are fixed per parameter set usi
 - Optional `serde` support via the `serde` feature
 - Deterministic key generation from a 32-byte seed
 
-## Installation
-
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-sntrup = "0.1"
-```
-
 ### Feature Flags
 
 The KEM API is split into three default features so downstream crates can pull in only what they need:
@@ -66,7 +57,7 @@ To use only a subset of the KEM API, disable defaults and pick the features you 
 ```toml
 [dependencies]
 # Decapsulation only (e.g. a receiver that never generates keys or encapsulates)
-sntrup = { version = "0.1", default-features = false, features = ["dcap"] }
+sntrup = { version = "0.3", default-features = false, features = ["dcap"] }
 ```
 
 ## Usage
@@ -151,7 +142,7 @@ assert_eq!(dk1, dk2);
 Enable the `serde` feature:
 
 ```toml
-sntrup = { version = "0.1", features = ["serde"] }
+sntrup = { version = "0.3", features = ["serde"] }
 ```
 
 Keys and ciphertexts serialize to hex in human-readable formats (JSON) and raw bytes in binary formats (postcard, bincode):
@@ -190,7 +181,7 @@ To compile for `wasm32-unknown-unknown`, enable the `js` feature so that `getran
 
 ```toml
 [dependencies]
-sntrup = { version = "0.1", features = ["js"] }
+sntrup = { version = "0.3", features = ["js"] }
 ```
 
 Install the target and build:
@@ -243,4 +234,4 @@ conditions.
 [docs-link]: https://docs.rs/sntrup/
 [license-image]: https://img.shields.io/badge/license-Apache2.0/MIT-blue.svg
 [downloads-image]: https://img.shields.io/crates/d/sntrup.svg
-[msrv-image]: https://img.shields.io/badge/rustc-1.90+-blue.svg
+[msrv-image]: https://img.shields.io/badge/rustc-1.95+-blue.svg
