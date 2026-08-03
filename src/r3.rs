@@ -78,9 +78,13 @@ fn mult_scalar(h: &mut [i8], f: &[i8], g: &[i8], p: usize) {
     h[..p].copy_from_slice(&fg[..p]);
 }
 
-/// Column-major schoolbook multiplication with AVX2 for R3 polynomials.
-/// Uses _mm256_sign_epi16 for {-1,0,1} multiplication and i16 accumulators.
-/// Processes 16 coefficients per SIMD instruction.
+/// Row-major schoolbook multiplication with AVX2 for R3 polynomials.
+///
+/// Same structure as `rq::mult`'s AVX2 kernel (see its doc comment): contiguous dot products
+/// over widened copies of `f` and a reversed `g`, four independent `_mm256_madd_epi16`
+/// accumulators (16 multiply-accumulates per instruction), one write per output coefficient,
+/// and a single mod-3 freeze per output during the `x^p ≡ x + 1` fold (|folded sum| ≤ 3p,
+/// well inside `mod3::freeze`'s i32 domain).
 #[cfg(all(target_arch = "x86_64", not(feature = "force-scalar")))]
 #[target_feature(enable = "avx2")]
 #[allow(
@@ -92,76 +96,105 @@ unsafe fn mult_avx2(h: &mut [i8], f: &[i8], g: &[i8], p: usize) {
     unsafe {
         use core::arch::x86_64::*;
 
-        let g_pad_len = (p + 15) & !15; // multiple of 16
-        let fg_pad_len = p + g_pad_len; // >= 2p-1
         let fg_len = p * 2 - 1;
 
-        // Sign-extend g to i16, padded
-        let mut g_pad = vec![0i16; g_pad_len];
+        let mut f16 = vec![0i16; p];
+        let mut g_rev = vec![0i16; p];
         for i in 0..p {
-            g_pad[i] = g[i] as i16;
+            f16[i] = f[i] as i16;
+            g_rev[i] = g[p - 1 - i] as i16;
         }
 
-        // i16 accumulators (max value: ±p, fits in i16 for p <= 1277)
-        let mut fg = vec![0i16; fg_pad_len];
+        // Raw i16 row sums (|sum| ≤ p ≤ 1277), padded with one zero so the fold below may
+        // read `fg[k + p]` unconditionally at `k = p - 1`.
+        let mut fg = vec![0i16; fg_len + 1];
+        for (i, out) in fg[..fg_len].iter_mut().enumerate() {
+            let jlo = i.saturating_sub(p - 1);
+            let len = i.min(p - 1) - jlo + 1;
+            let fp = f16.as_ptr().add(jlo);
+            let gp = g_rev.as_ptr().add(p - 1 - i + jlo);
 
-        // Column-major accumulation: fg[j+k] += f[j] * g[k]
-        for j in 0..p {
-            let fj = _mm256_set1_epi16(f[j] as i16);
+            let mut acc0 = _mm256_setzero_si256();
+            let mut acc1 = _mm256_setzero_si256();
+            let mut acc2 = _mm256_setzero_si256();
+            let mut acc3 = _mm256_setzero_si256();
             let mut k = 0usize;
-            while k + 16 <= g_pad_len {
-                let gk = _mm256_loadu_si256(g_pad.as_ptr().add(k) as *const __m256i);
-                // sign_epi16: if fj>0 → gk, if fj==0 → 0, if fj<0 → -gk
-                let prod = _mm256_sign_epi16(gk, fj);
-                let acc = _mm256_loadu_si256(fg.as_ptr().add(j + k) as *const __m256i);
-                _mm256_storeu_si256(
-                    fg.as_mut_ptr().add(j + k) as *mut __m256i,
-                    _mm256_add_epi16(acc, prod),
+            while k + 64 <= len {
+                acc0 = _mm256_add_epi32(
+                    acc0,
+                    _mm256_madd_epi16(
+                        _mm256_loadu_si256(fp.add(k) as *const __m256i),
+                        _mm256_loadu_si256(gp.add(k) as *const __m256i),
+                    ),
+                );
+                acc1 = _mm256_add_epi32(
+                    acc1,
+                    _mm256_madd_epi16(
+                        _mm256_loadu_si256(fp.add(k + 16) as *const __m256i),
+                        _mm256_loadu_si256(gp.add(k + 16) as *const __m256i),
+                    ),
+                );
+                acc2 = _mm256_add_epi32(
+                    acc2,
+                    _mm256_madd_epi16(
+                        _mm256_loadu_si256(fp.add(k + 32) as *const __m256i),
+                        _mm256_loadu_si256(gp.add(k + 32) as *const __m256i),
+                    ),
+                );
+                acc3 = _mm256_add_epi32(
+                    acc3,
+                    _mm256_madd_epi16(
+                        _mm256_loadu_si256(fp.add(k + 48) as *const __m256i),
+                        _mm256_loadu_si256(gp.add(k + 48) as *const __m256i),
+                    ),
+                );
+                k += 64;
+            }
+            while k + 16 <= len {
+                acc0 = _mm256_add_epi32(
+                    acc0,
+                    _mm256_madd_epi16(
+                        _mm256_loadu_si256(fp.add(k) as *const __m256i),
+                        _mm256_loadu_si256(gp.add(k) as *const __m256i),
+                    ),
                 );
                 k += 16;
             }
+            let s = _mm256_add_epi32(_mm256_add_epi32(acc0, acc1), _mm256_add_epi32(acc2, acc3));
+            let s4 = _mm_add_epi32(_mm256_castsi256_si128(s), _mm256_extracti128_si256(s, 1));
+            let s2 = _mm_add_epi32(s4, _mm_shuffle_epi32(s4, 0b0000_1110));
+            let s1 = _mm_add_epi32(s2, _mm_shuffle_epi32(s2, 0b0000_0001));
+            let mut sum = _mm_cvtsi128_si32(s1);
+            while k < len {
+                sum += *fp.add(k) as i32 * *gp.add(k) as i32;
+                k += 1;
+            }
+            *out = sum as i16;
         }
 
-        // Vectorized mod-3 freeze: mulhrs(a, 10923) gives floor((a*10923+16384)/32768)
-        // which is the correct quotient for |a| <= 1277.
-        // Result: a - 3*q is in {-1, 0, 1}.
-        let k10923 = _mm256_set1_epi16(10923);
-        let three16 = _mm256_set1_epi16(3);
-
-        let mut fg8 = vec![0i8; fg_len];
-        let mut i = 0usize;
-        while i + 32 <= fg_len {
-            // Process 32 values: two batches of 16 i16 → 32 i8
-            let a0 = _mm256_loadu_si256(fg.as_ptr().add(i) as *const __m256i);
-            let q0 = _mm256_mulhrs_epi16(a0, k10923);
-            let r0 = _mm256_sub_epi16(a0, _mm256_mullo_epi16(q0, three16));
-
-            let a1 = _mm256_loadu_si256(fg.as_ptr().add(i + 16) as *const __m256i);
-            let q1 = _mm256_mulhrs_epi16(a1, k10923);
-            let r1 = _mm256_sub_epi16(a1, _mm256_mullo_epi16(q1, three16));
-
-            // Pack 16+16 i16 → 32 i8, fix AVX2 lane ordering
-            let packed = _mm256_permute4x64_epi64(_mm256_packs_epi16(r0, r1), 0xD8);
-            _mm256_storeu_si256(fg8.as_mut_ptr().add(i) as *mut __m256i, packed);
-            i += 32;
+        // Fold x^p ≡ x + 1 with a single mod-3 freeze per output coefficient: fg[i] (i ≥ p)
+        // contributes to outputs i-p and i-p+1, and no fold target is itself ≥ p, so every
+        // output is independent.
+        h[0] = mod3::freeze(i32::from(fg[0]) + i32::from(fg[p]));
+        for k in 1..p {
+            h[k] = mod3::freeze(i32::from(fg[k]) + i32::from(fg[k + p]) + i32::from(fg[k + p - 1]));
         }
-        while i < fg_len {
-            fg8[i] = mod3::freeze(fg[i] as i32);
-            i += 1;
-        }
-
-        // Reduction: x^p ≡ x + 1 (mod x^p - x - 1)
-        for i in (p..(p * 2) - 1).rev() {
-            fg8[i - p] = mod3::freeze(fg8[i - p] as i32 + fg8[i] as i32);
-            fg8[i - p + 1] = mod3::freeze(fg8[i - p + 1] as i32 + fg8[i] as i32);
-        }
-        h[..p].copy_from_slice(&fg8[..p]);
     }
 }
 
-/// Column-major schoolbook multiplication with NEON for R3 polynomials.
-/// Uses vmulq_s16 for {-1,0,1} multiplication and i16 accumulators.
-/// Processes 8 coefficients per SIMD instruction.
+/// Row-major schoolbook multiplication with NEON for R3 polynomials.
+///
+/// Same structure as `rq::mult`'s NEON kernel (see its doc comment for the reasoning): each
+/// output coefficient's convolution sum is a contiguous dot product over `f` and a pre-reversed
+/// `g`, held across EIGHT independent widening accumulators so the multiply-accumulate
+/// latency is hidden, and written to memory once. Here the operands are ternary i8, so
+/// `vmlal_s8`/`vmlal_high_s8` (i8×i8→i16, 8 lanes per instruction) process 64 elements per
+/// unrolled iteration, and the i16 accumulator lanes stay far from overflow (each lane absorbs
+/// at most `p/8` unit products; the final cross-lane sum is bounded by `p ≤ 1277`).
+///
+/// The `x^p ≡ x + 1` fold then adds three raw row sums (|sum| ≤ 3p = 3831, well inside
+/// `mod3::freeze`'s i32 domain) with a single freeze per output coefficient, instead of the
+/// reference's three.
 #[cfg(all(target_arch = "aarch64", not(feature = "force-scalar")))]
 #[allow(
     unsafe_code,
@@ -172,74 +205,144 @@ unsafe fn mult_neon(h: &mut [i8], f: &[i8], g: &[i8], p: usize) {
     unsafe {
         use core::arch::aarch64::*;
 
-        let g_pad_len = (p + 15) & !15; // multiple of 16
-        let fg_pad_len = p + g_pad_len; // >= 2p-1
         let fg_len = p * 2 - 1;
 
-        // g is already i8 (ternary); just zero-pad it. Since both operands fit in i8,
-        // `vmlal_s8`/`vmlal_high_s8` widen-multiply-accumulate directly into the i16
-        // accumulator, processing 16 elements per 128-bit register instead of the 8 an
-        // i16-typed `g` would hold (see `rq::mult`'s NEON kernel for the i32->i16 analog of
-        // this, which measured a large win from the same trick).
-        let mut g_pad = vec![0i8; g_pad_len];
-        g_pad[..p].copy_from_slice(g);
+        let mut g_rev = vec![0i8; p];
+        for i in 0..p {
+            g_rev[i] = g[p - 1 - i];
+        }
 
-        // i16 accumulators (max value: ±p, fits in i16 for p <= 1277)
-        let mut fg = vec![0i16; fg_pad_len];
+        // Raw i16 row sums, padded with one zero so the fold below may read `fg[k + p]`
+        // unconditionally at `k = p - 1`.
+        let mut fg = vec![0i16; fg_len + 1];
+        for (i, out) in fg[..fg_len].iter_mut().enumerate() {
+            let jlo = i.saturating_sub(p - 1);
+            let len = i.min(p - 1) - jlo + 1;
+            let fp = f.as_ptr().add(jlo);
+            let gp = g_rev.as_ptr().add(p - 1 - i + jlo);
 
-        // Column-major accumulation: fg[j+k] += f[j] * g[k]
-        for j in 0..p {
-            let fj16 = vdupq_n_s8(f[j]);
-            let fj8 = vget_low_s8(fj16);
+            let mut acc0 = vdupq_n_s16(0);
+            let mut acc1 = vdupq_n_s16(0);
+            let mut acc2 = vdupq_n_s16(0);
+            let mut acc3 = vdupq_n_s16(0);
+            let mut acc4 = vdupq_n_s16(0);
+            let mut acc5 = vdupq_n_s16(0);
+            let mut acc6 = vdupq_n_s16(0);
+            let mut acc7 = vdupq_n_s16(0);
             let mut k = 0usize;
-            while k + 16 <= g_pad_len {
-                let gk = vld1q_s8(g_pad.as_ptr().add(k));
-                let acc_lo = vld1q_s16(fg.as_ptr().add(j + k));
-                let acc_hi = vld1q_s16(fg.as_ptr().add(j + k + 8));
-                vst1q_s16(
-                    fg.as_mut_ptr().add(j + k),
-                    vmlal_s8(acc_lo, vget_low_s8(gk), fj8),
-                );
-                vst1q_s16(
-                    fg.as_mut_ptr().add(j + k + 8),
-                    vmlal_high_s8(acc_hi, gk, fj16),
-                );
+            while k + 64 <= len {
+                let f0 = vld1q_s8(fp.add(k));
+                let f1 = vld1q_s8(fp.add(k + 16));
+                let f2 = vld1q_s8(fp.add(k + 32));
+                let f3 = vld1q_s8(fp.add(k + 48));
+                let g0 = vld1q_s8(gp.add(k));
+                let g1 = vld1q_s8(gp.add(k + 16));
+                let g2 = vld1q_s8(gp.add(k + 32));
+                let g3 = vld1q_s8(gp.add(k + 48));
+                acc0 = vmlal_s8(acc0, vget_low_s8(f0), vget_low_s8(g0));
+                acc1 = vmlal_high_s8(acc1, f0, g0);
+                acc2 = vmlal_s8(acc2, vget_low_s8(f1), vget_low_s8(g1));
+                acc3 = vmlal_high_s8(acc3, f1, g1);
+                acc4 = vmlal_s8(acc4, vget_low_s8(f2), vget_low_s8(g2));
+                acc5 = vmlal_high_s8(acc5, f2, g2);
+                acc6 = vmlal_s8(acc6, vget_low_s8(f3), vget_low_s8(g3));
+                acc7 = vmlal_high_s8(acc7, f3, g3);
+                k += 64;
+            }
+            while k + 16 <= len {
+                let f0 = vld1q_s8(fp.add(k));
+                let g0 = vld1q_s8(gp.add(k));
+                acc0 = vmlal_s8(acc0, vget_low_s8(f0), vget_low_s8(g0));
+                acc1 = vmlal_high_s8(acc1, f0, g0);
                 k += 16;
             }
+            let total = vaddq_s16(
+                vaddq_s16(vaddq_s16(acc0, acc1), vaddq_s16(acc2, acc3)),
+                vaddq_s16(vaddq_s16(acc4, acc5), vaddq_s16(acc6, acc7)),
+            );
+            let mut sum = i32::from(vaddvq_s16(total));
+            while k < len {
+                sum += i32::from(*fp.add(k)) * i32::from(*gp.add(k));
+                k += 1;
+            }
+            *out = sum as i16;
         }
 
-        // Vectorized mod-3 freeze: vqrdmulhq_s16(a, 10923) gives correct quotient
-        // for |a| <= 1277.  Result: a - 3*q is in {-1, 0, 1}.
-        let k10923 = vdupq_n_s16(10923);
-        let three16 = vdupq_n_s16(3);
-
-        let mut fg8 = vec![0i8; fg_len];
-        let mut i = 0usize;
-        while i + 16 <= fg_len {
-            // Process 16 values: two batches of 8 i16 → 16 i8
-            let a0 = vld1q_s16(fg.as_ptr().add(i));
-            let q0 = vqrdmulhq_s16(a0, k10923);
-            let r0 = vsubq_s16(a0, vmulq_s16(q0, three16));
-
-            let a1 = vld1q_s16(fg.as_ptr().add(i + 8));
-            let q1 = vqrdmulhq_s16(a1, k10923);
-            let r1 = vsubq_s16(a1, vmulq_s16(q1, three16));
-
-            // Pack 8+8 i16 → 16 i8 (naturally ordered, no permute needed)
-            let packed = vcombine_s8(vqmovn_s16(r0), vqmovn_s16(r1));
-            vst1q_s8(fg8.as_mut_ptr().add(i), packed);
-            i += 16;
+        // Fold x^p ≡ x + 1 with a single mod-3 freeze per output coefficient: fg[i] (i ≥ p)
+        // contributes to outputs i-p and i-p+1, and no fold target is itself ≥ p, so every
+        // output is independent.
+        h[0] = mod3::freeze(i32::from(fg[0]) + i32::from(fg[p]));
+        for k in 1..p {
+            h[k] = mod3::freeze(i32::from(fg[k]) + i32::from(fg[k + p]) + i32::from(fg[k + p - 1]));
         }
-        while i < fg_len {
-            fg8[i] = mod3::freeze(fg[i] as i32);
-            i += 1;
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+mod tests {
+    use super::*;
+
+    /// Deterministic xorshift64* so the test needs no RNG crates or features.
+    fn next(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        state.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    fn random_ternary(p: usize, seed: u64) -> Vec<i8> {
+        let mut s = seed | 1;
+        (0..p).map(|_| ((next(&mut s) % 3) as i8) - 1).collect()
+    }
+
+    /// Compare every compiled-in SIMD kernel against the scalar reference. Catches the class
+    /// of bug the KAT/roundtrip suite can miss when run with `--all-features`, which enables
+    /// `force-scalar` and silently compiles the SIMD kernels out of the test entirely.
+    fn check_case(p: usize, f: &[i8], g: &[i8], label: &str) {
+        let mut want = vec![0i8; p];
+        mult_scalar(&mut want, f, g, p);
+
+        #[cfg(all(target_arch = "aarch64", not(feature = "force-scalar")))]
+        {
+            let mut got = vec![0i8; p];
+            // SAFETY: NEON is baseline on aarch64
+            unsafe { mult_neon(&mut got, f, g, p) };
+            assert_eq!(got, want, "r3 mult_neon vs scalar: {label} p={p}");
+        }
+        #[cfg(all(target_arch = "x86_64", not(feature = "force-scalar")))]
+        if crate::cpu::has_avx2() {
+            let mut got = vec![0i8; p];
+            // SAFETY: AVX2 support confirmed by has_avx2()
+            unsafe { mult_avx2(&mut got, f, g, p) };
+            assert_eq!(got, want, "r3 mult_avx2 vs scalar: {label} p={p}");
         }
 
-        // Reduction: x^p ≡ x + 1 (mod x^p - x - 1)
-        for i in (p..(p * 2) - 1).rev() {
-            fg8[i - p] = mod3::freeze(fg8[i - p] as i32 + fg8[i] as i32);
-            fg8[i - p + 1] = mod3::freeze(fg8[i - p + 1] as i32 + fg8[i] as i32);
+        let mut got = vec![0i8; p];
+        mult(&mut got, f, g, p);
+        assert_eq!(got, want, "dispatched r3 mult vs scalar: {label} p={p}");
+    }
+
+    #[test]
+    fn simd_mult_matches_scalar_random() {
+        for p in [653usize, 761, 857, 953, 1013, 1277] {
+            for seed in 1..=8u64 {
+                let f = random_ternary(p, seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+                let g = random_ternary(p, seed.wrapping_mul(0xD1B5_4A32_D192_ED03));
+                check_case(p, &f, &g, "random");
+            }
         }
-        h[..p].copy_from_slice(&fg8[..p]);
+    }
+
+    /// All-ones operands maximize accumulator magnitude, probing the i16 headroom the NEON
+    /// widening-accumulate staging depends on.
+    #[test]
+    fn simd_mult_extremes_match_scalar() {
+        for p in [653usize, 761, 857, 953, 1013, 1277] {
+            let ones = vec![1i8; p];
+            let neg = vec![-1i8; p];
+            check_case(p, &ones, &ones, "all +1");
+            check_case(p, &ones, &neg, "+1 × -1");
+        }
     }
 }

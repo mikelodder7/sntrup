@@ -246,16 +246,18 @@ sntrup761 — the one parameter set with independent implementations to compare 
 cargo bench --manifest-path benches/comparison/Cargo.toml
 ```
 
-See [`benches/comparison/RESULTS.md`](benches/comparison/RESULTS.md) for one full run and its
-machine/build details, including a two-fix investigation of the gap against the C references:
-`rq::mult`'s NEON kernel was redundantly re-sign-extending part of its input on every one of its
-O(p) outer-loop iterations instead of once upfront, and it stored operands as i32 when
-disassembling PQClean's reference showed its autovectorizer using a NEON i16-widening
-multiply-accumulate this crate wasn't. Fixing both (and applying the second to `r3::mult` too)
-took encapsulate/decapsulate from ~1.9x/~2.1x slower than the C references to ~1.3x/~1.4x.
-RESULTS.md also documents several plausible-looking further micro-optimizations that were tried
-and measured *not* to help, and why — closing the remaining gap looks like it needs a profiler
-(Instruments/`perf`) rather than further guessing from disassembly and `Instant` timing.
+On an Apple M2 Max, this crate is faster than both C references on every operation — keypair by
+26%, encapsulate by 15%, decapsulate by 16% (sntrup761, NEON vs. their portable C). The
+polynomial-multiply kernels compute each output coefficient as a contiguous dot product spread
+across eight independent widening multiply-accumulate chains (`smlal`-family on NEON, `pmaddwd`
+on AVX2), a shape taken from disassembling what clang's autovectorizer produces for PQClean's
+reference C and then out-tuning it. See
+[`benches/comparison/RESULTS.md`](benches/comparison/RESULTS.md) for one full run with
+machine/build details, the complete investigation narrative (four landed fixes, five measured
+dead ends), and the SIMD-testing gotcha every contributor should read: `--all-features` enables
+`force-scalar`, which silently compiles the SIMD kernels out of the test binary — the permanent
+kernel-vs-scalar differential tests in `src/rq.rs`/`src/r3.rs` only exercise SIMD when built
+with a feature set that leaves `force-scalar` off (e.g. `--features kem,serde,std`).
 
 # License
 
