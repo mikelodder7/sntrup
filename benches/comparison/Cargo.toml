@@ -4,6 +4,10 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 
+# Standalone: opt out of any enclosing workspace so this harness's pinned dependency
+# versions (and its own Cargo.lock) never constrain the parent crate's resolution.
+[workspace]
+
 [dependencies]
 criterion = "=0.8.1"
 oqs = { version = "=0.11.0", default-features = false, features = ["ntruprime", "std"] }
