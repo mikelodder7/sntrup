@@ -39,14 +39,12 @@ pub fn reciprocal(s: &[i8], p: usize) -> (isize, Vec<i8>) {
 
 #[allow(unsafe_code)]
 pub fn mult(h: &mut [i8], f: &[i8], g: &[i8], p: usize) {
-    #[cfg(all(
-        target_arch = "x86_64",
-        target_feature = "avx2",
-        not(feature = "force-scalar")
-    ))]
-    // SAFETY: AVX2 verified by cfg
-    unsafe {
-        return mult_avx2(h, f, g, p);
+    #[cfg(all(target_arch = "x86_64", not(feature = "force-scalar")))]
+    if crate::cpu::has_avx2() {
+        // SAFETY: AVX2 support confirmed by has_avx2()
+        unsafe {
+            return mult_avx2(h, f, g, p);
+        }
     }
     #[cfg(all(target_arch = "aarch64", not(feature = "force-scalar")))]
     // SAFETY: NEON is baseline on aarch64
@@ -83,11 +81,7 @@ fn mult_scalar(h: &mut [i8], f: &[i8], g: &[i8], p: usize) {
 /// Column-major schoolbook multiplication with AVX2 for R3 polynomials.
 /// Uses _mm256_sign_epi16 for {-1,0,1} multiplication and i16 accumulators.
 /// Processes 16 coefficients per SIMD instruction.
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    not(feature = "force-scalar")
-))]
+#[cfg(all(target_arch = "x86_64", not(feature = "force-scalar")))]
 #[target_feature(enable = "avx2")]
 #[allow(
     unsafe_code,
@@ -178,30 +172,39 @@ unsafe fn mult_neon(h: &mut [i8], f: &[i8], g: &[i8], p: usize) {
     unsafe {
         use core::arch::aarch64::*;
 
-        let g_pad_len = (p + 7) & !7; // multiple of 8
+        let g_pad_len = (p + 15) & !15; // multiple of 16
         let fg_pad_len = p + g_pad_len; // >= 2p-1
         let fg_len = p * 2 - 1;
 
-        // Sign-extend g to i16, padded
-        let mut g_pad = vec![0i16; g_pad_len];
-        for i in 0..p {
-            g_pad[i] = g[i] as i16;
-        }
+        // g is already i8 (ternary); just zero-pad it. Since both operands fit in i8,
+        // `vmlal_s8`/`vmlal_high_s8` widen-multiply-accumulate directly into the i16
+        // accumulator, processing 16 elements per 128-bit register instead of the 8 an
+        // i16-typed `g` would hold (see `rq::mult`'s NEON kernel for the i32->i16 analog of
+        // this, which measured a large win from the same trick).
+        let mut g_pad = vec![0i8; g_pad_len];
+        g_pad[..p].copy_from_slice(g);
 
         // i16 accumulators (max value: ±p, fits in i16 for p <= 1277)
         let mut fg = vec![0i16; fg_pad_len];
 
         // Column-major accumulation: fg[j+k] += f[j] * g[k]
-        // vmulq_s16(gk, fj): for fj in {-1,0,1} this produces correct signed product
         for j in 0..p {
-            let fj = vdupq_n_s16(f[j] as i16);
+            let fj16 = vdupq_n_s8(f[j]);
+            let fj8 = vget_low_s8(fj16);
             let mut k = 0usize;
-            while k + 8 <= g_pad_len {
-                let gk = vld1q_s16(g_pad.as_ptr().add(k));
-                let prod = vmulq_s16(gk, fj);
-                let acc = vld1q_s16(fg.as_ptr().add(j + k));
-                vst1q_s16(fg.as_mut_ptr().add(j + k), vaddq_s16(acc, prod));
-                k += 8;
+            while k + 16 <= g_pad_len {
+                let gk = vld1q_s8(g_pad.as_ptr().add(k));
+                let acc_lo = vld1q_s16(fg.as_ptr().add(j + k));
+                let acc_hi = vld1q_s16(fg.as_ptr().add(j + k + 8));
+                vst1q_s16(
+                    fg.as_mut_ptr().add(j + k),
+                    vmlal_s8(acc_lo, vget_low_s8(gk), fj8),
+                );
+                vst1q_s16(
+                    fg.as_mut_ptr().add(j + k + 8),
+                    vmlal_high_s8(acc_hi, gk, fj16),
+                );
+                k += 16;
             }
         }
 

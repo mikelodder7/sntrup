@@ -67,14 +67,12 @@ pub fn round3(h: &mut [i16], params: &SntrupParameters) {
 
 #[allow(unsafe_code)]
 pub fn mult(h: &mut [i16], f: &[i16], g: &[i8], params: &SntrupParameters) {
-    #[cfg(all(
-        target_arch = "x86_64",
-        target_feature = "avx2",
-        not(feature = "force-scalar")
-    ))]
-    // SAFETY: AVX2 availability verified by cfg target_feature
-    unsafe {
-        return mult_avx2(h, f, g, params);
+    #[cfg(all(target_arch = "x86_64", not(feature = "force-scalar")))]
+    if crate::cpu::has_avx2() {
+        // SAFETY: AVX2 support confirmed by has_avx2()
+        unsafe {
+            return mult_avx2(h, f, g, params);
+        }
     }
     #[cfg(all(target_arch = "aarch64", not(feature = "force-scalar")))]
     // SAFETY: NEON is baseline on aarch64
@@ -115,11 +113,7 @@ fn mult_scalar(h: &mut [i16], f: &[i16], g: &[i8], params: &SntrupParameters) {
 
 /// Column-major schoolbook multiplication with AVX2.
 /// Processes 8 i32 multiply-accumulates per SIMD instruction.
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    not(feature = "force-scalar")
-))]
+#[cfg(all(target_arch = "x86_64", not(feature = "force-scalar")))]
 #[target_feature(enable = "avx2")]
 #[allow(
     unsafe_code,
@@ -141,8 +135,14 @@ unsafe fn mult_avx2(h: &mut [i16], f: &[i16], g: &[i8], params: &SntrupParameter
         let fg_pad_len = p + g_pad_len;
         let fg_len = p * 2 - 1;
 
-        let mut g_pad = vec![0i8; g_pad_len];
-        g_pad[..p].copy_from_slice(&g[..p]);
+        // Sign-extend g to i32 once, padded. This does not depend on j, so computing it
+        // outside the j-loop (rather than re-extending the same bytes on every one of the p
+        // outer iterations) turns the inner loop's load into a single direct i32 load instead
+        // of a narrow load plus a sign-extending convert on every iteration.
+        let mut g_pad = vec![0i32; g_pad_len];
+        for i in 0..p {
+            g_pad[i] = g[i] as i32;
+        }
         let mut fg = vec![0i32; fg_pad_len];
 
         // Accumulate f[j]*g[k] into fg[j+k]
@@ -150,8 +150,7 @@ unsafe fn mult_avx2(h: &mut [i16], f: &[i16], g: &[i8], params: &SntrupParameter
             let fj = _mm256_set1_epi32(f[j] as i32);
             let mut k = 0usize;
             while k < g_pad_len {
-                let gb = _mm_loadl_epi64(g_pad.as_ptr().add(k) as *const __m128i);
-                let gk = _mm256_cvtepi8_epi32(gb);
+                let gk = _mm256_loadu_si256(g_pad.as_ptr().add(k) as *const __m256i);
                 let prod = _mm256_mullo_epi32(fj, gk);
                 let acc = _mm256_loadu_si256(fg.as_ptr().add(j + k) as *const __m256i);
                 _mm256_storeu_si256(
@@ -205,7 +204,22 @@ unsafe fn mult_avx2(h: &mut [i16], f: &[i16], g: &[i8], params: &SntrupParameter
 }
 
 /// Column-major schoolbook multiplication with NEON.
-/// Processes 4 i32 multiply-accumulates per SIMD instruction.
+///
+/// `vmlal_n_s16`/`vmlal_high_n_s16` widen-multiply i16 inputs directly into the i32
+/// accumulator in one instruction, processing 8 elements per 128-bit register instead of the 4
+/// an i32-typed `g` would hold — disassembling PQClean's reference showed clang's
+/// autovectorizer reaching for the same instruction pair, which is what let its "portable" C
+/// come close to this crate's earlier i32-typed hand-written NEON kernel; switching to i16
+/// closed most of the remaining gap.
+///
+/// Two row-major variants were also tried, informed by the same disassembly: one with an i32
+/// accumulator and a single dependency chain per row (much slower — the per-row `vaddvq_s32`
+/// horizontal reduction, paid `2p-1` times, cost more than the memory traffic it removed), and
+/// one combining the i16 widening-MAC above with two independent accumulator chains per row
+/// (matching clang's four-chain unrolling) to hide that latency. The second one measured
+/// statistically tied with column-major here — memory traffic apparently stopped being the
+/// bottleneck once each MAC did twice the work, at which point the two structures converge.
+/// Column-major is kept for being the simpler of the two at equal speed.
 #[cfg(all(target_arch = "aarch64", not(feature = "force-scalar")))]
 #[allow(
     unsafe_code,
@@ -222,28 +236,43 @@ unsafe fn mult_neon(h: &mut [i16], f: &[i16], g: &[i8], params: &SntrupParameter
         let b1 = params.barrett1;
         let b2 = params.barrett2;
 
-        // Pad to multiples of 4 so SIMD loops need no remainder handling
-        let g_pad_len = (p + 3) & !3;
+        // Pad to multiples of 8 so SIMD loops need no remainder handling
+        let g_pad_len = (p + 7) & !7;
         let fg_pad_len = p + g_pad_len;
         let fg_len = p * 2 - 1;
 
-        let mut g_pad = vec![0i8; g_pad_len];
-        g_pad[..p].copy_from_slice(&g[..p]);
+        // Sign-extend g to i16 once, padded (`f` is already Fq-range i16, both operands fit
+        // without the i32 widening this crate used previously). This does not depend on j, so
+        // computing it outside the j-loop avoids re-extending the same bytes on every one of
+        // the p outer iterations.
+        let mut g_pad = vec![0i16; g_pad_len];
+        for i in 0..p {
+            g_pad[i] = g[i] as i16;
+        }
         let mut fg = vec![0i32; fg_pad_len];
 
-        // Accumulate f[j]*g[k] into fg[j+k]
+        // Accumulate f[j]*g[k] into fg[j+k]. `vmlal_n_s16`/`vmlal_high_n_s16` widen-multiply
+        // i16 inputs directly into the i32 accumulator in one instruction, processing 8
+        // elements per 128-bit register instead of the 4 an i32-typed `g` would hold —
+        // disassembling PQClean's reference showed clang's autovectorizer reaching for the
+        // same instruction pair, which is what let its "portable" C match this crate's
+        // hand-written i32 NEON kernel.
         for j in 0..p {
-            let fj = vdupq_n_s32(f[j] as i32);
+            let fj = f[j];
             let mut k = 0usize;
-            while k + 4 <= g_pad_len {
-                // Sign-extend 4 i8 -> i16 -> i32
-                let gb = vld1_s8(g_pad.as_ptr().add(k));
-                let g16 = vmovl_s8(gb);
-                let gk = vmovl_s16(vget_low_s16(g16));
-                let prod = vmulq_s32(fj, gk);
-                let acc = vld1q_s32(fg.as_ptr().add(j + k));
-                vst1q_s32(fg.as_mut_ptr().add(j + k), vaddq_s32(acc, prod));
-                k += 4;
+            while k + 8 <= g_pad_len {
+                let gk = vld1q_s16(g_pad.as_ptr().add(k));
+                let acc_lo = vld1q_s32(fg.as_ptr().add(j + k));
+                let acc_hi = vld1q_s32(fg.as_ptr().add(j + k + 4));
+                vst1q_s32(
+                    fg.as_mut_ptr().add(j + k),
+                    vmlal_n_s16(acc_lo, vget_low_s16(gk), fj),
+                );
+                vst1q_s32(
+                    fg.as_mut_ptr().add(j + k + 4),
+                    vmlal_high_n_s16(acc_hi, gk, fj),
+                );
+                k += 8;
             }
         }
 

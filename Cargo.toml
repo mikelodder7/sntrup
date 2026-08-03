@@ -10,6 +10,7 @@ documentation = "https://docs.rs/crate/sntrup"
 categories = ["algorithms", "cryptography"]
 readme = "README.md"
 edition = "2024"
+exclude = ["benches/comparison/**", "tests/**", ".github/**"]
 
 [features]
 default = ["kgen", "ecap", "dcap"]
@@ -22,12 +23,18 @@ std = []
 serde = ["dep:serdect", "dep:serde"]
 js = ["getrandom/wasm_js"]
 
+# Implementations of the `kem` crate traits, covering all three operations at once.
+kem = ["dep:kem", "dep:hybrid-array", "dep:rand_core", "kgen", "ecap", "dcap"]
+
 [dependencies]
 hex = "0.4"
 rand = "0.10.0"
 rand_chacha = "0.10.0"
 subtle = "2"
 getrandom = { version = "0.4", optional = true }
+hybrid-array = { version = "0.4.13", features = ["extra-sizes"], optional = true }
+kem = { version = "0.3", optional = true }
+rand_core = { version = "0.10", optional = true }
 serde = { version = "1", optional = true, default-features = false }
 serdect = { version = "0.4", optional = true }
 # sha2 0.11 dropped the `asm` feature; hardware SHA acceleration is now selected
@@ -39,6 +46,11 @@ zeroize = { version = "1", features = ["derive"] }
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
 serde_json = "1"
+
+[[example]]
+name = "kem_traits"
+path = "examples/kem_traits.rs"
+required-features = ["kem"]
 
 [[bench]]
 name = "mod"

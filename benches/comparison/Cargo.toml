@@ -1,0 +1,17 @@
+[package]
+name = "sntrup-comparison"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+criterion = "=0.8.1"
+oqs = { version = "=0.11.0", default-features = false, features = ["ntruprime", "std"] }
+pqcrypto-ntruprime = { version = "=0.1.6", default-features = false, features = ["std"] }
+pqcrypto-traits = "=0.3.5"
+rand = "0.10.0"
+sntrup = { path = "../.." }
+
+[[bench]]
+name = "implementations"
+harness = false

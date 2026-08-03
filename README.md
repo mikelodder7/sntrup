@@ -49,6 +49,7 @@ The KEM API is split into three default features so downstream crates can pull i
 | `ecap`  | **yes** | Encapsulation: `EncapsulationKey::encapsulate` |
 | `dcap`  | **yes** | Decapsulation: `DecapsulationKey::decapsulate` |
 | `force-scalar` | no | Disable SIMD (AVX2/NEON) and use pure-Rust scalar code |
+| `kem`   | no | Implements the [`kem`](https://docs.rs/kem) crate's traits (`Encapsulate`, `Decapsulate`, `Kem`, ...) so this crate can be used generically alongside other KEMs. See [`sntrup::kem`](src/kem.rs) and `examples/kem_traits.rs`. |
 | `serde` | no | Enables `Serialize`/`Deserialize` for all key and ciphertext types (via `serdect` for constant-time hex encoding) |
 | `js`    | no | Enables WebAssembly support for `wasm32-unknown-unknown` by configuring `getrandom` to use JavaScript's `crypto.getRandomValues()` |
 
@@ -175,6 +176,30 @@ let ek2 = EncapsulationKey::<Sntrup761Params>::try_from(ek_bytes).unwrap();
 assert_eq!(ek, ek2);
 ```
 
+### `kem` crate integration
+
+With the `kem` feature enabled, the [`kem`](https://docs.rs/kem) module implements that crate's
+traits for every parameter set, so Streamlined NTRU Prime can be used in generic code alongside
+other KEMs. The traits and the parameter-set marker types are re-exported there, so no direct
+dependency on the `kem` crate is needed:
+
+```rust
+# #[cfg(feature = "kem")] {
+use sntrup::kem::{Decapsulate, Encapsulate, Kem, Sntrup761Params};
+use rand::SeedableRng;
+use rand::rngs::{StdRng, SysRng};
+
+let mut rng = StdRng::try_from_rng(&mut SysRng).expect("OS randomness");
+
+let (dk, ek) = Sntrup761Params::generate_keypair_from_rng(&mut rng);
+let (ct, sent) = ek.encapsulate_with_rng(&mut rng);
+assert_eq!(dk.decapsulate(&ct), sent);
+# }
+```
+
+Run `cargo run --release --example kem_traits --features kem` for KEM-generic code and key
+export.
+
 ## WebAssembly
 
 To compile for `wasm32-unknown-unknown`, enable the `js` feature so that `getrandom` uses JavaScript's `crypto.getRandomValues()` for randomness:
@@ -209,6 +234,28 @@ This implementation has not undergone any security auditing and while care has b
 #### Algorithm
 
 Streamlined NTRU Prime was first published in 2016. The algorithm still requires careful security review. Please see [here](https://ntruprime.cr.yp.to/warnings.html) for further warnings from the authors regarding NTRU Prime and lattice-based encryption schemes.
+
+## Performance
+
+`cargo bench` runs this crate's own Criterion suite (`benches/mod.rs`) across all six parameter
+sets. A separate standalone harness at [`benches/comparison`](benches/comparison) benchmarks
+sntrup761 — the one parameter set with independent implementations to compare against — against
+`pqcrypto-ntruprime` (PQClean's C reference) and `oqs` (liboqs):
+
+```sh
+cargo bench --manifest-path benches/comparison/Cargo.toml
+```
+
+See [`benches/comparison/RESULTS.md`](benches/comparison/RESULTS.md) for one full run and its
+machine/build details, including a two-fix investigation of the gap against the C references:
+`rq::mult`'s NEON kernel was redundantly re-sign-extending part of its input on every one of its
+O(p) outer-loop iterations instead of once upfront, and it stored operands as i32 when
+disassembling PQClean's reference showed its autovectorizer using a NEON i16-widening
+multiply-accumulate this crate wasn't. Fixing both (and applying the second to `r3::mult` too)
+took encapsulate/decapsulate from ~1.9x/~2.1x slower than the C references to ~1.3x/~1.4x.
+RESULTS.md also documents several plausible-looking further micro-optimizations that were tried
+and measured *not* to help, and why — closing the remaining gap looks like it needs a profiler
+(Instruments/`perf`) rather than further guessing from disassembly and `Instant` timing.
 
 # License
 

@@ -44,9 +44,12 @@
 //! - `dcap`: Decapsulation (default)
 //! - `serde`: Serde serialization support via `serdect`
 
+mod cpu;
 mod ct;
 mod error;
-mod kem;
+#[cfg(feature = "kem")]
+pub mod kem;
+mod ops;
 mod params;
 mod r3;
 mod rq;
