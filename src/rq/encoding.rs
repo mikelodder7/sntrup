@@ -1,5 +1,6 @@
 use super::modq;
 use crate::params::SntrupParameters;
+use zeroize::Zeroize;
 
 /// Maximum number of pairing levels across all parameter sets (P up to 1277).
 /// Levels: 1277 -> 639 -> 320 -> 160 -> 80 -> 40 -> 20 -> 10 -> 5 -> 3 -> 2 -> base case (n=1).
@@ -291,6 +292,10 @@ pub fn rounded_encode(f: &[i16], params: &SntrupParameters) -> Vec<u8> {
     let mut m = vec![q_rounded; p];
     let mut out = vec![0u8; params.rounded_encode_size];
     encode(&mut out, &mut r, &mut m, p);
+    // On the decapsulation path `f` is the re-encrypted candidate, secret until (and unless)
+    // the constant-time ciphertext comparison succeeds — wipe the working representation,
+    // which `encode` mutates in place across pairing levels. `m` holds only public moduli.
+    r.zeroize();
     out
 }
 

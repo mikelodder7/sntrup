@@ -9,8 +9,10 @@ pub(crate) fn hash_prefix(out: &mut [u8; 32], prefix: u8, input: &[u8]) {
     let mut hasher = Sha512::new();
     hasher.update([prefix]);
     hasher.update(input);
-    let digest = hasher.finalize();
+    let mut digest = hasher.finalize();
     out.copy_from_slice(&digest[..32]);
+    // The discarded upper half is still derived from (possibly secret) input — wipe it.
+    digest.zeroize();
 }
 
 /// hash_confirm: Hash(2 || Hash(3 || r_enc) || cache)
@@ -23,8 +25,10 @@ pub(crate) fn hash_confirm(out: &mut [u8; 32], r_enc: &[u8], cache: &[u8; 32]) {
     hasher.update([2u8]);
     hasher.update(inner);
     hasher.update(&cache[..]);
-    let digest = hasher.finalize();
+    let mut digest = hasher.finalize();
     out.copy_from_slice(&digest[..32]);
+    inner.zeroize();
+    digest.zeroize();
 }
 
 /// hash_session: Hash(b || Hash(3 || y) || z)
@@ -36,8 +40,10 @@ pub(crate) fn hash_session(out: &mut [u8; 32], b: u8, y: &[u8], z: &[u8]) {
     hasher.update([b]);
     hasher.update(inner);
     hasher.update(z);
-    let digest = hasher.finalize();
+    let mut digest = hasher.finalize();
     out.copy_from_slice(&digest[..32]);
+    inner.zeroize();
+    digest.zeroize();
 }
 
 /// Constant-time: returns 0 if x == 0, -1 (0xFFFFFFFF) otherwise.

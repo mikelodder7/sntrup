@@ -299,6 +299,11 @@ impl<P: SntrupParams> SntrupKem<P> {
     ///
     /// The seed is expanded via ChaCha20Rng to derive the full key pair.
     /// Identical seeds always produce identical key pairs.
+    ///
+    /// Note: `rand_chacha` offers no zeroization support, so the RNG's internal state (which
+    /// contains the seed) is dropped without being wiped when this returns. Callers with
+    /// strict key-erasure requirements should treat the seed's residency in freed stack
+    /// memory as a known limitation of this function.
     pub fn generate_key_deterministic(
         seed: &[u8; 32],
     ) -> (EncapsulationKey<P>, DecapsulationKey<P>) {

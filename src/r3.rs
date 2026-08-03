@@ -2,6 +2,7 @@ pub mod mod3;
 mod vector;
 
 use crate::ct::{smaller_mask, swap_int};
+use zeroize::Zeroize;
 
 #[allow(clippy::cast_possible_wrap)]
 pub fn reciprocal(s: &[i8], p: usize) -> (isize, Vec<i8>) {
@@ -34,6 +35,11 @@ pub fn reciprocal(s: &[i8], p: usize) -> (isize, Vec<i8>) {
     }
 
     vector::product(&mut r, p, &u[p..], mod3::reciprocal(f[p]));
+    // The Euclidean state is derived from the secret input — wipe it before returning.
+    f.zeroize();
+    g.zeroize();
+    u.zeroize();
+    v.zeroize();
     (smaller_mask(0, d), r)
 }
 
@@ -76,6 +82,8 @@ fn mult_scalar(h: &mut [i8], f: &[i8], g: &[i8], p: usize) {
         fg[i - p + 1] = mod3::freeze(fg[i - p + 1] as i32 + fg[i] as i32);
     }
     h[..p].copy_from_slice(&fg[..p]);
+    // At least one operand is secret at every call site — wipe the product scratch.
+    fg.zeroize();
 }
 
 /// Row-major schoolbook multiplication with AVX2 for R3 polynomials.
@@ -112,7 +120,7 @@ unsafe fn mult_avx2(h: &mut [i8], f: &[i8], g: &[i8], p: usize) {
             let jlo = i.saturating_sub(p - 1);
             let len = i.min(p - 1) - jlo + 1;
             let fp = f16.as_ptr().add(jlo);
-            let gp = g_rev.as_ptr().add(p - 1 - i + jlo);
+            let gp = g_rev.as_ptr().add(p - 1 + jlo - i);
 
             let mut acc0 = _mm256_setzero_si256();
             let mut acc1 = _mm256_setzero_si256();
@@ -179,6 +187,12 @@ unsafe fn mult_avx2(h: &mut [i8], f: &[i8], g: &[i8], p: usize) {
         for k in 1..p {
             h[k] = mod3::freeze(i32::from(fg[k]) + i32::from(fg[k + p]) + i32::from(fg[k + p - 1]));
         }
+
+        // At least one operand is secret at every call site — wipe the widened copies and
+        // the product scratch.
+        f16.zeroize();
+        g_rev.zeroize();
+        fg.zeroize();
     }
 }
 
@@ -219,7 +233,7 @@ unsafe fn mult_neon(h: &mut [i8], f: &[i8], g: &[i8], p: usize) {
             let jlo = i.saturating_sub(p - 1);
             let len = i.min(p - 1) - jlo + 1;
             let fp = f.as_ptr().add(jlo);
-            let gp = g_rev.as_ptr().add(p - 1 - i + jlo);
+            let gp = g_rev.as_ptr().add(p - 1 + jlo - i);
 
             let mut acc0 = vdupq_n_s16(0);
             let mut acc1 = vdupq_n_s16(0);
@@ -275,6 +289,11 @@ unsafe fn mult_neon(h: &mut [i8], f: &[i8], g: &[i8], p: usize) {
         for k in 1..p {
             h[k] = mod3::freeze(i32::from(fg[k]) + i32::from(fg[k + p]) + i32::from(fg[k + p - 1]));
         }
+
+        // At least one operand is secret at every call site — wipe the reversed copy and
+        // the product scratch.
+        g_rev.zeroize();
+        fg.zeroize();
     }
 }
 

@@ -11,14 +11,20 @@ every crate except `pqcrypto-ntruprime` (`avx2` feature left off — see the REA
 
 | Operation    | `sntrup` (this crate) | PQClean (clean C) | liboqs (clean C) |
 |--------------|------------------------|--------------------|-------------------|
-| keypair      | **1.337 ms**           | 1.811 ms           | 1.872 ms          |
-| encapsulate  | **45.42 µs**           | 53.14 µs           | 53.74 µs          |
-| decapsulate  | **77.77 µs**           | 92.18 µs           | 93.77 µs          |
+| keypair      | **1.341 ms**           | 1.780 ms           | 1.827 ms          |
+| encapsulate  | **50.00 µs**           | 51.54 µs           | 51.39 µs          |
+| decapsulate  | **84.52 µs**           | 90.20 µs           | 90.54 µs          |
 
 Bold marks the fastest of the three per row. Each figure is Criterion's reported mean. This
-crate is now the fastest of the three on every operation: keypair by 26%, encapsulate by 15%,
-decapsulate by 16%. At the start of this investigation it trailed the C references by 1.86x on
-encapsulate and 2.06x on decapsulate.
+crate is the fastest of the three on every operation — keypair by 25%, encapsulate by ~3%,
+decapsulate by ~6% — *while also zeroizing every secret-derived scratch buffer, which the C
+references do not do* (their kernels leave secret-holding stack arrays unwiped). At the start
+of this investigation it trailed the C references by 1.86x on encapsulate and 2.06x on
+decapsulate. Before the hardening pass (no scratch wiping, matching the C references'
+behavior) the margins were wider: encapsulate 45.4 µs (15% faster than PQClean) and
+decapsulate 77.8 µs (16% faster); the wipes cost ~11% because the `zeroize` crate's
+per-element volatile writes are deliberately opaque to the optimizer. That trade was accepted
+knowingly: audited-crate wipes over hand-rolled `unsafe` memset-and-fence.
 
 ## How the gap was closed
 
@@ -88,14 +94,26 @@ separately. The differential tests fail loudly in the first configuration if a k
 - Batching two adjacent `j` in column-major (round 2): correctness bug (overlapping
   read-modify-write), caught only by direct kernel-vs-scalar comparison — see Guardrails.
 
+## Hardening pass
+
+After the performance work, every secret-derived heap temporary the crate allocates is now
+wiped with the `zeroize` crate before it is freed: the multiply kernels' reversed-operand
+copies and product scratch (`rq::mult`, `r3::mult`, all scalar/NEON/AVX2 variants), both
+`reciprocal` functions' Euclidean state, `random_tsmall`'s sorted tagged randomness,
+`rounded_encode`'s in-place working representation (secret-derived on the decapsulation
+path), and the SHA-512 helpers' 64-byte digests and inner-hash temporaries (the discarded
+upper 32 bytes are secret-derived). Known residual limitation, documented on the function:
+`generate_key_deterministic`'s ChaCha20 RNG state is dropped unwiped because `rand_chacha`
+has no zeroization support.
+
 ## This crate's own sweep (native, NEON active, default features)
 
-`cargo bench` (`benches/mod.rs`), same machine, current state:
+`cargo bench` (`benches/mod.rs`), same machine, current state (with scratch zeroization):
 
 | Parameter set | keygen    | encapsulate | decapsulate |
 |----------------|-----------|-------------|-------------|
-| sntrup761      | 1.340 ms  | 44.95 µs    | 76.09 µs    |
-| sntrup1277     | 3.634 ms  | 102.7 µs    | 196.5 µs    |
+| sntrup761      | 1.322 ms  | 50.56 µs    | 84.14 µs    |
+| sntrup1277     | 3.651 ms  | 111.2 µs    | 210.0 µs    |
 
 At the start of the investigation: sntrup761 encapsulate 101.4 µs / decapsulate 196.1 µs;
 sntrup1277 encapsulate 252.7 µs / decapsulate 525.0 µs. **2.26x / 2.58x faster** (761) and

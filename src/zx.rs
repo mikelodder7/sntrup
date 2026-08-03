@@ -304,5 +304,7 @@ pub mod random {
         for (fv, &rv) in f.iter_mut().zip(r.iter()) {
             *fv = ((rv & 3) as i8) - 1;
         }
+        // The sorted tagged randomness fully determines the secret polynomial — wipe it.
+        zeroize::Zeroize::zeroize(&mut r);
     }
 }

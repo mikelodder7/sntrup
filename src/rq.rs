@@ -4,6 +4,7 @@ mod vector;
 
 use crate::ct::{smaller_mask, swap_int};
 use crate::params::SntrupParameters;
+use zeroize::Zeroize;
 
 #[allow(clippy::cast_possible_wrap)]
 pub fn reciprocal3(s: &[i8], params: &SntrupParameters) -> Vec<i16> {
@@ -49,6 +50,11 @@ pub fn reciprocal3(s: &[i8], params: &SntrupParameters) -> Vec<i16> {
         b1,
         b2,
     );
+    // The Euclidean state is derived from the secret input — wipe it before returning.
+    f.zeroize();
+    g.zeroize();
+    u.zeroize();
+    v.zeroize();
     // Note: unlike r3::reciprocal, no invertibility check is returned here.
     // For these parameter sets q is prime and x^p - x - 1 is irreducible mod q,
     // so R/q is a field and the weight-w secret f is always invertible — the
@@ -109,6 +115,8 @@ fn mult_scalar(h: &mut [i16], f: &[i16], g: &[i8], params: &SntrupParameters) {
         fg[i - p + 1] = modq::freeze(fg[i - p + 1] as i32 + fg[i] as i32, q, b1, b2);
     }
     h[..p].copy_from_slice(&fg[..p]);
+    // At least one operand is secret at every call site — wipe the product scratch.
+    fg.zeroize();
 }
 
 /// Row-major schoolbook multiplication with AVX2.
@@ -152,7 +160,7 @@ unsafe fn mult_avx2(h: &mut [i16], f: &[i16], g: &[i8], params: &SntrupParameter
             let jlo = i.saturating_sub(p - 1);
             let len = i.min(p - 1) - jlo + 1;
             let fp = f.as_ptr().add(jlo);
-            let gp = g_rev.as_ptr().add(p - 1 - i + jlo);
+            let gp = g_rev.as_ptr().add(p - 1 + jlo - i);
 
             let mut acc0 = _mm256_setzero_si256();
             let mut acc1 = _mm256_setzero_si256();
@@ -260,6 +268,11 @@ unsafe fn mult_avx2(h: &mut [i16], f: &[i16], g: &[i8], params: &SntrupParameter
             h[k] = modq::freeze(fg32[k] + fg32[k + p] + fg32[k + p - 1], q, b1, b2);
             k += 1;
         }
+
+        // At least one operand is secret at every call site — wipe the reversed copy and
+        // the product scratch.
+        g_rev.zeroize();
+        fg32.zeroize();
     }
 }
 
@@ -314,7 +327,7 @@ unsafe fn mult_neon(h: &mut [i16], f: &[i16], g: &[i8], params: &SntrupParameter
             let jlo = i.saturating_sub(p - 1);
             let len = i.min(p - 1) - jlo + 1;
             let fp = f.as_ptr().add(jlo);
-            let gp = g_rev.as_ptr().add(p - 1 - i + jlo);
+            let gp = g_rev.as_ptr().add(p - 1 + jlo - i);
 
             let mut acc0 = vdupq_n_s32(0);
             let mut acc1 = vdupq_n_s32(0);
@@ -407,6 +420,11 @@ unsafe fn mult_neon(h: &mut [i16], f: &[i16], g: &[i8], params: &SntrupParameter
             h[k] = modq::freeze(fg32[k] + fg32[k + p] + fg32[k + p - 1], q, b1, b2);
             k += 1;
         }
+
+        // At least one operand is secret at every call site — wipe the reversed copy and
+        // the product scratch.
+        g_rev.zeroize();
+        fg32.zeroize();
     }
 }
 

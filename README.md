@@ -231,6 +231,11 @@ For `wasm32-wasi` (or `wasm32-wasip1`), the `js` feature is **not** needed since
 
 This implementation has not undergone any security auditing and while care has been taken no guarantees can be made for either correctness or the constant time running of the underlying functions. **Please use at your own risk.**
 
+Secret-derived heap temporaries (multiply scratch, Euclidean-inversion state, sampling
+randomness, hash intermediates) are wiped with the [`zeroize`](https://docs.rs/zeroize) crate
+before being freed. One documented exception: `generate_key_deterministic`'s ChaCha20 RNG state
+cannot be wiped because `rand_chacha` offers no zeroization support.
+
 #### Algorithm
 
 Streamlined NTRU Prime was first published in 2016. The algorithm still requires careful security review. Please see [here](https://ntruprime.cr.yp.to/warnings.html) for further warnings from the authors regarding NTRU Prime and lattice-based encryption schemes.
@@ -247,7 +252,8 @@ cargo bench --manifest-path benches/comparison/Cargo.toml
 ```
 
 On an Apple M2 Max, this crate is faster than both C references on every operation — keypair by
-26%, encapsulate by 15%, decapsulate by 16% (sntrup761, NEON vs. their portable C). The
+25%, encapsulate by ~3%, decapsulate by ~6% (sntrup761, NEON vs. their portable C) — while
+also zeroizing every secret-derived scratch buffer, which the C references do not do. The
 polynomial-multiply kernels compute each output coefficient as a contiguous dot product spread
 across eight independent widening multiply-accumulate chains (`smlal`-family on NEON, `pmaddwd`
 on AVX2), a shape taken from disassembling what clang's autovectorizer produces for PQClean's
