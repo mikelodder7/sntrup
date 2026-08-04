@@ -25,8 +25,8 @@
     clippy::cast_possible_wrap
 )]
 
+use crate::wipe::wipe;
 use core::arch::x86_64::*;
-use zeroize::Zeroize;
 
 const NUMVEC_MAX: usize = 5; // ceil((1277 + 1) / 256)
 
@@ -323,10 +323,10 @@ pub fn reciprocal_divstep(s: &[i8], p: usize) -> (isize, Vec<i8>) {
     // Everything above is derived from the secret input. The unpacked byte planes
     // and the input scratch zeroize directly; the bitplane registers are wiped
     // through their raw bytes, since `__m256i` has no `Zeroize` impl.
-    b0.zeroize();
-    b1.zeroize();
-    fs.zeroize();
-    gs.zeroize();
+    wipe(&mut b0);
+    wipe(&mut b1);
+    wipe(&mut fs);
+    wipe(&mut gs);
     for regs in [
         f0.as_mut_ptr(),
         f1.as_mut_ptr(),
@@ -337,11 +337,14 @@ pub fn reciprocal_divstep(s: &[i8], p: usize) -> (isize, Vec<i8>) {
         r0.as_mut_ptr(),
         r1.as_mut_ptr(),
     ] {
-        // SAFETY: each array is NUMVEC_MAX `__m256i` values living on this
-        // frame; reinterpreting it as its own bytes is in-bounds and aligned.
+        // SAFETY: each array is NUMVEC_MAX `__m256i` values on this frame, so
+        // reinterpreting it as u64 words is in-bounds and correctly aligned
+        // (`__m256i` is 32-byte aligned, and its size is a multiple of 8).
         unsafe {
-            core::slice::from_raw_parts_mut(regs.cast::<u8>(), NUMVEC_MAX * size_of::<__m256i>())
-                .zeroize();
+            wipe(core::slice::from_raw_parts_mut(
+                regs.cast::<u64>(),
+                NUMVEC_MAX * size_of::<__m256i>() / 8,
+            ));
         }
     }
 

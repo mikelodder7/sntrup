@@ -26,8 +26,8 @@
     clippy::needless_range_loop
 )]
 
+use crate::wipe::wipe;
 use core::arch::x86_64::*;
-use zeroize::Zeroize;
 
 const Q: i16 = 4591;
 
@@ -359,10 +359,10 @@ pub fn mult3_761(h: &mut [i8], f: &[i8], g: &[i8]) {
             h[k] = out[k] as i8;
         }
         // Both operands are secret at every call site — wipe the working buffers.
-        fp.zeroize();
-        gp.zeroize();
-        fg.zeroize();
-        out.zeroize();
+        wipe(&mut fp);
+        wipe(&mut gp);
+        wipe(&mut fg);
+        wipe(&mut out);
     }
 }
 
@@ -409,9 +409,9 @@ pub fn mult761(h: &mut [i16], f: &[i16], g: &[i8]) {
         h[..P].copy_from_slice(&fp[..P]);
         // `g` is secret at every call site — wipe the operand copies and the
         // product scratch.
-        fp.zeroize();
-        gp.zeroize();
-        fg.zeroize();
+        wipe(&mut fp);
+        wipe(&mut gp);
+        wipe(&mut fg);
     }
 }
 

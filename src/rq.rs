@@ -6,7 +6,7 @@ mod vector;
 
 use crate::ct::{smaller_mask, swap_int};
 use crate::params::SntrupParameters;
-use zeroize::Zeroize;
+use crate::wipe::wipe;
 
 /// Reciprocal of `3·s` in R/q, dispatched: divstep on x86_64/AVX2, the
 /// top-coefficient-elimination form elsewhere. Both produce identical canonical
@@ -117,10 +117,10 @@ fn reciprocal3_divstep(s: &[i8], params: &SntrupParameters) -> Vec<i16> {
         *o = modq::product(scale, vi, q, b1, b2);
     }
     // The divstep state is derived from the secret input — wipe it before returning.
-    f.zeroize();
-    g.zeroize();
-    v.zeroize();
-    r.zeroize();
+    wipe(&mut f);
+    wipe(&mut g);
+    wipe(&mut v);
+    wipe(&mut r);
     out
 }
 
@@ -189,10 +189,10 @@ fn reciprocal3_eliminate(s: &[i8], params: &SntrupParameters) -> Vec<i16> {
         b2,
     );
     // The Euclidean state is derived from the secret input — wipe it before returning.
-    f.zeroize();
-    g.zeroize();
-    u.zeroize();
-    v.zeroize();
+    wipe(&mut f);
+    wipe(&mut g);
+    wipe(&mut u);
+    wipe(&mut v);
     // Note: unlike r3::reciprocal, no invertibility check is returned here.
     // For these parameter sets q is prime and x^p - x - 1 is irreducible mod q,
     // so R/q is a field and the weight-w secret f is always invertible — the
@@ -271,7 +271,7 @@ fn mult_scalar(h: &mut [i16], f: &[i16], g: &[i8], params: &SntrupParameters) {
     }
     h[..p].copy_from_slice(&fg[..p]);
     // At least one operand is secret at every call site — wipe the product scratch.
-    fg.zeroize();
+    wipe(&mut fg);
 }
 
 /// Row-major schoolbook multiplication for x86_64, expanded once per instruction level
@@ -435,8 +435,8 @@ macro_rules! rq_mult_x86_kernel {
 
                 // At least one operand is secret at every call site — wipe the
                 // reversed copy and the product scratch.
-                g_rev.zeroize();
-                fg32.zeroize();
+                wipe(&mut g_rev);
+                wipe(&mut fg32);
             }
         }
     };
@@ -602,8 +602,8 @@ unsafe fn mult_neon(h: &mut [i16], f: &[i16], g: &[i8], params: &SntrupParameter
 
         // At least one operand is secret at every call site — wipe the reversed copy
         // and the product scratch.
-        g_rev.zeroize();
-        fg32.zeroize();
+        wipe(&mut g_rev);
+        wipe(&mut fg32);
     }
 }
 

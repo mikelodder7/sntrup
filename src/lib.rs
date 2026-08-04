@@ -57,6 +57,7 @@ mod rq;
 mod simd;
 mod types;
 mod utils;
+mod wipe;
 mod zx;
 
 pub use error::Error;

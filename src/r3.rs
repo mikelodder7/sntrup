@@ -4,7 +4,7 @@ pub mod mod3;
 mod vector;
 
 use crate::ct::{smaller_mask, swap_int};
-use zeroize::Zeroize;
+use crate::wipe::wipe;
 
 /// Reciprocal in R/3, dispatched: bitsliced divstep on x86_64/AVX2, the
 /// elimination form elsewhere. Same `(mask, r)` contract on both paths.
@@ -74,10 +74,10 @@ fn reciprocal_eliminate(s: &[i8], p: usize) -> (isize, Vec<i8>) {
 
     vector::product(&mut r, p, &u[p..], mod3::reciprocal(f[p]));
     // The Euclidean state is derived from the secret input — wipe it before returning.
-    f.zeroize();
-    g.zeroize();
-    u.zeroize();
-    v.zeroize();
+    wipe(&mut f);
+    wipe(&mut g);
+    wipe(&mut u);
+    wipe(&mut v);
     (smaller_mask(0, d), r)
 }
 
@@ -137,7 +137,7 @@ fn mult_scalar(h: &mut [i8], f: &[i8], g: &[i8], p: usize) {
     }
     h[..p].copy_from_slice(&fg[..p]);
     // At least one operand is secret at every call site — wipe the product scratch.
-    fg.zeroize();
+    wipe(&mut fg);
 }
 
 /// Row-major schoolbook multiplication for R3 polynomials on x86_64, expanded once per

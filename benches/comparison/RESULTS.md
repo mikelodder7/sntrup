@@ -636,3 +636,97 @@ allocation and RNG noise; both numbers are reported rather than the flattering o
    remove nearly all of it. This is a plain refactor with no numerical risk and is probably
    the best effort-to-reward item remaining.
 4. **~1.8 µs of SHA-512** — outside this crate.
+
+---
+
+# Post-merge (2026-08-04): rebased onto `hardening` + CI-gate commits
+
+Our optimization work was rebased onto the pulled commits. Two files conflicted (`src/r3.rs`,
+`src/rq.rs`) because the remote's `hardening` commit independently applied **the same
+`p - 1 + jlo - i` underflow fix** to the multiply kernels, in regions we had since
+macro-wrapped. Resolved in favour of our restructured code, then the remote's zeroization was
+ported into it by hand — including into the code paths the remote never saw (`rq::ntt`,
+`r3::bitsliced`, `reciprocal3_divstep`), whose scratch buffers hold secret-derived
+intermediates for exactly the same reason.
+
+Correctness after merge: all four test configurations green, clippy clean on x86_64 and
+aarch64, fmt clean, and both KATs unchanged — x86 output identical to pre-merge, ARM still
+byte-identical to x86.
+
+**The hardening is not free.** Zeroization is volatile and cannot be optimized away.
+
+The first post-merge measurement was taken while a video call was running, so it was re-run on
+an idle machine. Comparing the two runs exposed a measurement problem worth fixing: **liboqs,
+whose code did not change at all, moved +2.1% between them.** That is the run-to-run drift
+floor on this machine, and it means comparing raw microseconds across runs overstates or
+understates changes by roughly that much.
+
+The fix is to quote the ratio against liboqs measured *in the same run*, which cancels
+whole-machine drift:
+
+| Operation | pre-merge | post-merge (quiet) | regression |
+|-----------|-----------|--------------------|------------|
+| keypair | 1.18× | **1.22×** | +3.3% |
+| encapsulate | 1.53× | **1.62×** | +5.9% |
+| decapsulate | 2.37× | **2.61×** | +10.1% |
+
+Absolute means from the quiet run: keypair 133.1 µs (liboqs 109.2), encapsulate 18.5 (11.4),
+decapsulate 21.6 (8.3). Versus PQClean: 34× / 13× / 28×.
+
+The earlier call-contaminated run reported the regressions as +2.5% / +9.0% / +15.3% from raw
+absolutes. Normalised, they are +3.3% / +5.9% / +10.1% — so the decapsulate cost was
+overstated by about a third, but **the regression is real and material**, not an artifact.
+
+*Methodology note for future rounds: report the same-run ratio against an unchanged reference,
+not deltas between absolute means from different runs. Single criterion `change:` verdicts
+across runs are unreliable at this magnitude even when they carry p < 0.05.*
+
+**Open question for the maintainer.** The zeroization is currently applied at the *outer*
+buffers of the NTT path but not to the transform's internal working buffers (`prime_pass`'s
+6×512 batch and the inverse-NTT scratch), which hold the same secret-derived data. There are
+three coherent positions and they should be chosen deliberately rather than drifting:
+
+1. **Wipe everything**, accepting a further slowdown on top of the 15%.
+2. **Keep the current boundary** — wipe what crosses function boundaries, accept that
+   transform internals live briefly on one frame.
+3. **Wipe nothing in the NTT path**, recovering the ~3 µs, on the argument that these are
+   short-lived stack frames immediately reused.
+
+This is a security-policy call, not a performance one, so it is left as-is (option 2) pending
+a decision.
+
+---
+
+# x86_64 round 10 (2026-08-04): zeroize cost recovered without weakening it
+
+The hardening regression was not the wiping — it was the *granularity* of the wiping.
+`Zeroize` on a slice issues one volatile store **per element**, and the compiler is not
+permitted to merge or vectorize volatile stores. Across the multi-kilobyte SIMD scratch
+buffers that meant thousands of 2-byte stores per call.
+
+Isolating it: disabling the NTT wipes entirely moved decapsulation from 2.61× to 2.22×, so
+the wiping cost 0.39 ratio points — about 18% of the operation.
+
+`src/wipe.rs` now re-views a buffer as `[u64]` before zeroizing, wiping any unaligned head and
+tail at their own width. **The volatile guarantee is identical** — every byte is still written
+through a volatile store, and the trailing fence is unchanged — but a quarter as many stores
+are issued for `i16` data and an eighth for `i8`. All wipe sites route through it: the NTT
+multiplies, both inversions (divstep and elimination), the schoolbook kernels, and the
+bitsliced module's byte planes and bitplane registers.
+
+| Operation | pre-merge | post-merge (element-wise) | **now (u64-width)** |
+|-----------|-----------|---------------------------|---------------------|
+| keypair | 1.18× | 1.22× | **1.18×** |
+| encapsulate | 1.53× | 1.62× | **1.58×** |
+| decapsulate | 2.37× | 2.61× | **2.27×** |
+
+Absolutes: keypair 127.6 µs (liboqs 108.2), encapsulate 18.2 (11.6), decapsulate 19.8 (8.7).
+
+Keypair is fully back to its pre-merge ratio and decapsulation is now **better** than
+pre-merge, despite carrying zeroization the pre-merge tree did not have at all. Encapsulate
+retains about 3% — just above this machine's ~2% noise floor.
+
+Nothing was given up to get this: the wiping still covers every buffer it covered before,
+including the paths the remote's commit never saw. Verified with all four test
+configurations, clippy clean on x86_64 and aarch64, and both KATs unchanged — x86 output
+identical to pre-merge, ARM still byte-identical to x86.
