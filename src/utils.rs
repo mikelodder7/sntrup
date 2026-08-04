@@ -372,14 +372,7 @@ pub(crate) fn decapsulate_inner(cstr: &[u8], sk: &[u8], params: &SntrupParameter
     let mut cf = vec![0i16; p];
     rq::mult(&mut cf, &c, &f, params);
     let mut t3 = vec![0i8; p];
-    for i in 0..p {
-        t3[i] = r3::mod3::freeze(rq::modq::freeze(
-            3 * cf[i] as i32,
-            params.q,
-            params.barrett1,
-            params.barrett2,
-        ) as i32);
-    }
+    rq::scale3_freeze3(&mut t3, &cf, params);
     let mut r = vec![0i8; p];
     r3::mult(&mut r, &t3, &ginv, p);
 

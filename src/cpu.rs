@@ -14,6 +14,9 @@ use core::sync::atomic::{AtomicU8, Ordering};
 #[cfg(all(target_arch = "x86_64", not(feature = "force-scalar")))]
 static AVX2_STATE: AtomicU8 = AtomicU8::new(0);
 
+#[cfg(all(target_arch = "x86_64", not(feature = "force-scalar")))]
+static AVXVNNI_STATE: AtomicU8 = AtomicU8::new(0);
+
 /// Returns `true` if the host CPU supports AVX2.
 #[cfg(all(target_arch = "x86_64", not(feature = "force-scalar")))]
 #[inline]
@@ -29,6 +32,22 @@ pub(crate) fn has_avx2() -> bool {
     }
 }
 
+/// Returns `true` if the host CPU supports AVX-VNNI (the VEX-encoded `vpdpwssd`
+/// family — Zen 5, Alder Lake and later).
+#[cfg(all(target_arch = "x86_64", not(feature = "force-scalar")))]
+#[inline]
+pub(crate) fn has_avxvnni() -> bool {
+    match AVXVNNI_STATE.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let detected = std::is_x86_feature_detected!("avxvnni");
+            AVXVNNI_STATE.store(if detected { 1 } else { 2 }, Ordering::Relaxed);
+            detected
+        }
+    }
+}
+
 #[cfg(all(test, target_arch = "x86_64", not(feature = "force-scalar")))]
 mod tests {
     use super::*;
@@ -38,6 +57,10 @@ mod tests {
         let first = has_avx2();
         for _ in 0..8 {
             assert_eq!(has_avx2(), first);
+        }
+        let first = has_avxvnni();
+        for _ in 0..8 {
+            assert_eq!(has_avxvnni(), first);
         }
     }
 }

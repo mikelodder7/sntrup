@@ -113,6 +113,104 @@ fn encode_single(out: &mut [u8], mut val: u32, mut modulus: u32) -> usize {
     pos
 }
 
+/// AVX2 expansion of one decode level whose pairs all share a modulus `m` and
+/// bottom-byte count `bb` — the shape levels 0-2 always have (see RESULTS.md).
+///
+/// Handles pairs `[lo, hi)` backward in blocks of eight 32-bit lanes:
+/// `combined = out[i]·256^bb + LE(s[start + i·bb ..][..bb])`, then
+/// `out[2i] = combined mod m`, `out[2i+1] = (combined / m) mod m`, replicating
+/// `uint32_divmod_uint14`'s two Barrett steps plus speculative correction
+/// lanewise. Callers guarantee `lo >= 8`, so a block's writes (`out[2i..2i+16]`)
+/// never overlap its reads (`out[i..i+8]`).
+///
+/// `bb` is 1 or 2 for every level this is invoked on; other values fall back to
+/// the scalar path.
+#[cfg(all(target_arch = "x86_64", not(feature = "force-scalar")))]
+#[target_feature(enable = "avx2")]
+#[allow(unsafe_code)]
+unsafe fn decode_level_avx2(
+    out: &mut [u16],
+    s: &[u8],
+    m: u16,
+    bb: usize,
+    start: usize,
+    lo: usize,
+    hi: usize,
+) {
+    unsafe {
+        use core::arch::x86_64::*;
+
+        let m32 = u32::from(m);
+        #[allow(clippy::cast_possible_truncation)]
+        let v = (0x8000_0000u64 / u64::from(m32)) as u32;
+        let mv = _mm256_set1_epi32(m32.cast_signed());
+        let vv = _mm256_set1_epi64x(i64::from(v));
+
+        // 8-lane u32 multiply-high-by-v, keeping bit 31 upward (the scalar
+        // code's `(x as u64 * v) >> 31`). AVX2 only multiplies even 32-bit
+        // lanes, so run the even and odd halves separately and reblend.
+        let qhat = |x: __m256i| -> __m256i {
+            let pe = _mm256_srli_epi64::<31>(_mm256_mul_epu32(x, vv));
+            let po = _mm256_srli_epi64::<31>(_mm256_mul_epu32(_mm256_srli_epi64::<32>(x), vv));
+            _mm256_blend_epi32::<0b1010_1010>(pe, _mm256_slli_epi64::<32>(po))
+        };
+
+        // One Barrett step: returns (quotient_part, remainder).
+        let step = |x: __m256i| -> (__m256i, __m256i) {
+            let q = qhat(x);
+            (q, _mm256_sub_epi32(x, _mm256_mullo_epi32(q, mv)))
+        };
+
+        let mut i = hi;
+        while i >= lo + 8 {
+            i -= 8;
+
+            let ov = _mm256_cvtepu16_epi32(_mm_loadu_si128(out.as_ptr().add(i) as *const __m128i));
+            let bytes = if bb == 1 {
+                _mm256_cvtepu8_epi32(_mm_loadl_epi64(s.as_ptr().add(start + i) as *const __m128i))
+            } else {
+                _mm256_cvtepu16_epi32(_mm_loadu_si128(
+                    s.as_ptr().add(start + 2 * i) as *const __m128i
+                ))
+            };
+            let shift = if bb == 1 { 8 } else { 16 };
+            let combined = _mm256_add_epi32(_mm256_sllv_epi32(ov, _mm256_set1_epi32(shift)), bytes);
+
+            // divmod: two Barrett steps then the speculative correction.
+            let (q0, r0) = step(combined);
+            let (q1, r1) = step(r0);
+            let q = _mm256_add_epi32(q0, q1);
+            let rsub = _mm256_sub_epi32(r1, mv);
+            let mask = _mm256_srai_epi32::<31>(rsub);
+            let rem = _mm256_add_epi32(rsub, _mm256_and_si256(mask, mv));
+            let quo = _mm256_add_epi32(_mm256_add_epi32(q, _mm256_set1_epi32(1)), mask);
+
+            // out[2i+1] = quo mod m (one more reduction; quo < m^2 / ... but a
+            // single Barrett step plus correction suffices, matching
+            // uint32_mod_uint14).
+            let (_, hr0) = step(quo);
+            let (_, hr1) = step(hr0);
+            let hsub = _mm256_sub_epi32(hr1, mv);
+            let hmask = _mm256_srai_epi32::<31>(hsub);
+            let hi_val = _mm256_add_epi32(hsub, _mm256_and_si256(hmask, mv));
+
+            // Interleave (rem, hi_val) into out[2i .. 2i+16] as u16.
+            let lo16 = _mm256_packus_epi32(rem, hi_val); // lanes: r0..3 h0..3 r4..7 h4..7
+            let fixed = _mm256_permute4x64_epi64::<0b11_01_10_00>(lo16); // r0..3 r4..7 h0..3 h4..7
+            let r16 = _mm256_castsi256_si128(fixed);
+            let h16 = _mm256_extracti128_si256::<1>(fixed);
+            _mm_storeu_si128(
+                out.as_mut_ptr().add(2 * i) as *mut __m128i,
+                _mm_unpacklo_epi16(r16, h16),
+            );
+            _mm_storeu_si128(
+                out.as_mut_ptr().add(2 * i + 8) as *mut __m128i,
+                _mm_unpackhi_epi16(r16, h16),
+            );
+        }
+    }
+}
+
 /// Iterative variable-radix decoding. Forward pass computes moduli and byte
 /// offsets at each level; backward pass expands decoded values from base case.
 #[allow(clippy::cast_possible_truncation)]
@@ -196,7 +294,50 @@ fn decode(out: &mut [u16], s: &[u8], m_in: &[u16], n_start: usize) {
         // Process backwards: reads from out[i], writes to out[2*i] / out[2*i+1].
         let mut bpos = level_bottom_start[level] + level_bottom_total[level];
 
-        for i in (0..n2).rev() {
+        // Uniform-modulus fast path: when every full pair on this level shares
+        // one modulus and one bottom-byte count (true for the wide levels of
+        // every parameter set), `bpos` is the closed form `start + i*bb` and the
+        // whole level vectorizes. Pairs below index 8 stay scalar because their
+        // writes would overlap the block's reads.
+        #[cfg(all(target_arch = "x86_64", not(feature = "force-scalar")))]
+        let mut simd_done_to = n2;
+        #[cfg(all(target_arch = "x86_64", not(feature = "force-scalar")))]
+        {
+            let n_full = n / 2;
+            if n_full >= 16 && crate::cpu::has_avx2() {
+                let m0 = all_m[m_off];
+                let mut cm = u32::from(m0) * u32::from(all_m[m_off + 1]);
+                let mut bb = 0usize;
+                while cm >= 16384 {
+                    bb += 1;
+                    cm = (cm + 255) >> 8;
+                }
+                let uniform = (0..n_full)
+                    .all(|k| all_m[m_off + 2 * k] == m0 && all_m[m_off + 2 * k + 1] == m0);
+                if uniform && (bb == 1 || bb == 2) {
+                    let start = level_bottom_start[level];
+                    // The unpaired tail element is the highest index the scalar
+                    // loop would visit, so it must be copied BEFORE the kernel
+                    // runs — the kernel's stores reach out[2*n_full - 1] and
+                    // would otherwise clobber out[n2 - 1] before it is read.
+                    if n % 2 == 1 {
+                        out[2 * (n2 - 1)] = out[n2 - 1];
+                    }
+                    // SAFETY: AVX2 confirmed by has_avx2(); lo = 8 keeps every
+                    // block's writes clear of its reads.
+                    unsafe {
+                        decode_level_avx2(out, s, m0, bb, start, 8, n_full);
+                    }
+                    // Blocks covered [8 + ((n_full - 8) % 8), n_full).
+                    simd_done_to = 8 + (n_full - 8) % 8;
+                    bpos = level_bottom_start[level] + simd_done_to * bb;
+                }
+            }
+        }
+        #[cfg(not(all(target_arch = "x86_64", not(feature = "force-scalar"))))]
+        let simd_done_to = n2;
+
+        for i in (0..simd_done_to).rev() {
             if 2 * i + 1 < n {
                 // Recompute bottom-byte count for this pair
                 let mut cm = (all_m[m_off + 2 * i] as u32) * (all_m[m_off + 2 * i + 1] as u32);

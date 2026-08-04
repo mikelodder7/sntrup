@@ -180,8 +180,73 @@ pub mod random {
                         i += 1;
                     }
                 }
+            } else if off0 == 0 && off1 == p_mask {
+                // Register-local pass at stride p ∈ {1,2,4}: within one 8-lane
+                // block, lane l pairs with lane l ^ p. One load, one permute,
+                // min/max, one const-immediate blend, one store.
+                let mut i0 = 0usize;
+                macro_rules! local_pass {
+                    ($swap:expr, $imm:literal) => {
+                        while i0 + 8 <= end {
+                            let v = _mm256_loadu_si256(x.as_ptr().add(i0) as *const __m256i);
+                            let w = $swap(v);
+                            let mn = _mm256_min_epi32(v, w);
+                            let mx = _mm256_max_epi32(v, w);
+                            _mm256_storeu_si256(
+                                x.as_mut_ptr().add(i0) as *mut __m256i,
+                                _mm256_blend_epi32::<$imm>(mn, mx),
+                            );
+                            i0 += 8;
+                        }
+                    };
+                }
+                match p_mask {
+                    4 => local_pass!(|v| _mm256_permute4x64_epi64::<0x4E>(v), 0b1111_0000),
+                    2 => local_pass!(|v| _mm256_shuffle_epi32::<0x4E>(v), 0b1100_1100),
+                    _ => local_pass!(|v| _mm256_shuffle_epi32::<0xB1>(v), 0b1010_1010),
+                }
+                for i in i0..end {
+                    if i & p_mask == 0 {
+                        int32_minmax(x, i + off0, i + off1);
+                    }
+                }
+            } else if off1 >= 8 {
+                // Sub-pass with small selection stride p ∈ {1,2,4} but distant
+                // partner (off1 ≥ 8): two loads at the two offsets, min/max, and a
+                // const-immediate blend keeps inactive lanes (l & p ≠ 0) unchanged.
+                let mut i0 = 0usize;
+                macro_rules! masked_pass {
+                    ($imm:literal) => {
+                        while i0 + 8 <= end {
+                            let a = _mm256_loadu_si256(x.as_ptr().add(i0 + off0) as *const __m256i);
+                            let b = _mm256_loadu_si256(x.as_ptr().add(i0 + off1) as *const __m256i);
+                            let mn = _mm256_min_epi32(a, b);
+                            let mx = _mm256_max_epi32(a, b);
+                            _mm256_storeu_si256(
+                                x.as_mut_ptr().add(i0 + off0) as *mut __m256i,
+                                _mm256_blend_epi32::<$imm>(a, mn),
+                            );
+                            _mm256_storeu_si256(
+                                x.as_mut_ptr().add(i0 + off1) as *mut __m256i,
+                                _mm256_blend_epi32::<$imm>(b, mx),
+                            );
+                            i0 += 8;
+                        }
+                    };
+                }
+                match p_mask {
+                    4 => masked_pass!(0b0000_1111),
+                    2 => masked_pass!(0b0011_0011),
+                    _ => masked_pass!(0b0101_0101),
+                }
+                for i in i0..end {
+                    if i & p_mask == 0 {
+                        int32_minmax(x, i + off0, i + off1);
+                    }
+                }
             } else {
-                // Small strides: scalar
+                // Small p with nearby partner (off1 < 8): overlapping-store hazard,
+                // scalar. Only the (2,2,4), (1,1,2), (1,1,4) shapes land here.
                 for i in 0..end {
                     if i & p_mask == 0 {
                         int32_minmax(x, i + off0, i + off1);
@@ -306,5 +371,45 @@ pub mod random {
         }
         // The sorted tagged randomness fully determines the secret polynomial — wipe it.
         zeroize::Zeroize::zeroize(&mut r);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+mod sort_tests {
+    use super::random::sort;
+
+    fn next(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        state.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    /// The dispatched sort must produce fully sorted output at every length that
+    /// exercises the vectorized large-stride, register-local, masked sub-pass,
+    /// and scalar paths — including the six parameter sizes.
+    #[test]
+    fn sort_orders_correctly_at_all_path_lengths() {
+        let mut s = 0x0dd_ba11u64 | 1;
+        for &n in &[
+            0usize, 1, 2, 3, 7, 8, 9, 15, 16, 17, 31, 64, 100, 653, 761, 857, 953, 1013, 1277,
+        ] {
+            for pattern in 0..7 {
+                let mut x: Vec<i32> = (0..n)
+                    .map(|i| match pattern {
+                        0..=2 => next(&mut s) as i32,   // random
+                        3 => 42,                        // all equal
+                        4 => i as i32,                  // sorted
+                        5 => (n - i) as i32,            // reverse sorted
+                        _ => (next(&mut s) % 4) as i32, // heavy duplicates
+                    })
+                    .collect();
+                let mut want = x.clone();
+                want.sort_unstable();
+                sort(&mut x, n);
+                assert_eq!(x, want, "sort mismatch at n={n} pattern={pattern}");
+            }
+        }
     }
 }

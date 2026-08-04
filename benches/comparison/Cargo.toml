@@ -19,3 +19,9 @@ sntrup = { path = "../.." }
 [[bench]]
 name = "implementations"
 harness = false
+
+# clang 22 (Fedora 44) makes bindgen render OQS_SIG as an opaque type, and the generated
+# layout assert for it fails to compile. This vendored copy only disables layout tests for
+# the sig header (unused by this KEM-only bench); kem/common/rand bindings are unchanged.
+[patch.crates-io]
+oqs-sys = { path = "vendor/oqs-sys" }

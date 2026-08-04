@@ -534,8 +534,6 @@ dependencies = [
 [[package]]
 name = "oqs-sys"
 version = "0.11.0+liboqs-0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac6d66ee528a895ce5cc08851698d109c5d7ee5d7a0b3b40d61550eda91e414f"
 dependencies = [
  "bindgen",
  "build-deps",

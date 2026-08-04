@@ -53,6 +53,8 @@ mod ops;
 mod params;
 mod r3;
 mod rq;
+#[cfg(all(target_arch = "x86_64", not(feature = "force-scalar")))]
+mod simd;
 mod types;
 mod utils;
 mod zx;
