@@ -17,9 +17,9 @@ PQClean's C reference:
 | decapsulate | 8.4 µs | 8.4 µs (1.00x) | 607.0 µs (72.6x) |
 
 On aarch64 (Apple M2 Max) against their portable C builds (2026-08-05, after the divstep
-port and the encapsulation-key cache): keypair 2.6x, encapsulate 19%, decapsulate 19%. We
-are ahead on every operation on both architectures while also zeroizing every secret-derived
-scratch buffer, which neither C reference does.
+port, the encapsulation-key cache, and the sampler round): keypair 2.7x, encapsulate 40%,
+decapsulate 19%. We are ahead on every operation on both architectures while also zeroizing
+every secret-derived scratch buffer, which neither C reference does.
 
 ## Reading this file
 
@@ -1536,3 +1536,56 @@ the same way.
 3. **Codec vectorization** (`rq_decode` / `rounded_*`): the x86 profile's post-NTT
    bottleneck. The variable-radix divmod chains are serial per level but lanes within a
    level are independent; whatever shape fixes it on x86 should port.
+
+---
+
+# ARM round 3 (2026-08-05, Apple M2 Max): the constant-weight sampler
+
+Round 2 left `random_tsmall` as encapsulate's largest component. An `Instant` breakdown put
+it at 19.9 µs of the 42 µs operation (47%): 10.9 µs Batcher sort, 2.6 µs of per-element RNG
+calls, and a surprising 6.4 µs of overhead — a heap allocation plus a per-element `Zeroize`
+wipe of the 3 KB tag buffer that had never been switched to the wide-store `wipe` module.
+Three changes:
+
+**1. Overhead: stack scratch + wide wipe.** The tag buffer moved to the `uninit_scratch!`
+stack pattern the rest of the hot path already uses, and both frames are wiped through
+`crate::wipe::wipe` (u64-wide volatile stores on aarch64) instead of per-`i32` `Zeroize`.
+
+**2. One bulk RNG call instead of `p`.** For any `rand_core` generator, `next_u32` is
+defined as the next four stream bytes little-endian, so `fill_bytes` over a `4p`-byte buffer
+reinterpreted LE is *value-identical* to the `p`-element `rng.random::<i32>()` loop — not
+just distributionally equivalent. The deterministic-keygen KATs pin this: they would fail on
+any divergence, and they pass unchanged.
+
+**3. The NEON Batcher learned the AVX2 Batcher's tricks.** The old pass structure ran 4
+lanes only at strides ≥ 4 and fell to scalar for every small-stride pass. Ported from the
+x86 Batcher (with 128-bit lane arithmetic): register-local first passes at p ∈ {1, 2}
+(`vrev64q_s32` / `vextq_s32` partner shuffles + constant-mask `vbsl` blends), masked
+two-load sub-passes for distant partners, and 16-element blocks in the large-stride path.
+One subtlety the 4-lane width adds that 8 lanes did not: the off1 = 4 sub-pass shapes
+overlap their load windows by 2–3 lanes, but every overlapping low-window lane is inactive
+for those shapes, so low-store-then-high-store ordering is exact; the single shape with an
+active lane in the overlap, (p, off0, off1) = (1, 1, 2), provably breaks under either store
+order and stays scalar. The existing all-lengths/all-patterns sort sweep covers every one of
+these shapes at every parameter size.
+
+Sampler: 19.9 → 10.3 µs (sort 10.9 → 7.9). Encapsulate: 42.1 → **36.6 µs**. Same-run
+comparison:
+
+| Operation | sntrup | PQClean (clean C) | liboqs (clean C) |
+|-----------|-------:|------------------:|-----------------:|
+| keypair | **683.7 µs** | 1.829 ms (2.7x) | 1.876 ms (2.7x) |
+| encapsulate | **37.0 µs** | 51.7 µs (1.40x) | 52.7 µs (1.42x) |
+| decapsulate | **77.1 µs** | 91.9 µs (1.19x) | 91.8 µs (1.19x) |
+
+Full sweep: sntrup761 keygen 685 µs / encaps 36.6 µs / decaps 68.0 µs; sntrup1277 keygen
+1.85 ms / encaps 86.9 µs / decaps 182.0 µs.
+
+The sort is still 7.9 µs against the ~1–2 µs a djbsort-class NEON port should reach (the x86
+port measured 7.6x over its Batcher); that remains the sampler's ceiling, and the NEON NTT
+remains the multiply's. A false alarm worth recording for the method notes: an early
+validation loop here reported all eight CI feature-gate configs failing — the harness shell
+is zsh, which does not word-split unquoted variables, so `cargo test $flags` received the
+entire flag string as one argument and died on arg parsing, in every config, before building
+anything. `${=flags}` (or grading by captured per-config logs) is the fix; the configs were
+never broken.

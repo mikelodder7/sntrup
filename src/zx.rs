@@ -331,11 +331,31 @@ pub mod random {
 
             let end = n.saturating_sub(off1);
             if p_mask >= 4 {
+                // Contiguous blocks of p_mask elements; four vectors per iteration for ILP.
                 let mut i = 0;
                 while i < end {
                     if i & p_mask == 0 {
                         let block_end = (i + p_mask).min(end);
                         let mut j = i;
+                        while j + 16 <= block_end {
+                            let a0 = vld1q_s32(x.as_ptr().add(j + off0));
+                            let a1 = vld1q_s32(x.as_ptr().add(j + off0 + 4));
+                            let a2 = vld1q_s32(x.as_ptr().add(j + off0 + 8));
+                            let a3 = vld1q_s32(x.as_ptr().add(j + off0 + 12));
+                            let b0 = vld1q_s32(x.as_ptr().add(j + off1));
+                            let b1 = vld1q_s32(x.as_ptr().add(j + off1 + 4));
+                            let b2 = vld1q_s32(x.as_ptr().add(j + off1 + 8));
+                            let b3 = vld1q_s32(x.as_ptr().add(j + off1 + 12));
+                            vst1q_s32(x.as_mut_ptr().add(j + off0), vminq_s32(a0, b0));
+                            vst1q_s32(x.as_mut_ptr().add(j + off0 + 4), vminq_s32(a1, b1));
+                            vst1q_s32(x.as_mut_ptr().add(j + off0 + 8), vminq_s32(a2, b2));
+                            vst1q_s32(x.as_mut_ptr().add(j + off0 + 12), vminq_s32(a3, b3));
+                            vst1q_s32(x.as_mut_ptr().add(j + off1), vmaxq_s32(a0, b0));
+                            vst1q_s32(x.as_mut_ptr().add(j + off1 + 4), vmaxq_s32(a1, b1));
+                            vst1q_s32(x.as_mut_ptr().add(j + off1 + 8), vmaxq_s32(a2, b2));
+                            vst1q_s32(x.as_mut_ptr().add(j + off1 + 12), vmaxq_s32(a3, b3));
+                            j += 16;
+                        }
                         while j + 4 <= block_end {
                             let a = vld1q_s32(x.as_ptr().add(j + off0));
                             let b = vld1q_s32(x.as_ptr().add(j + off1));
@@ -353,8 +373,77 @@ pub mod random {
                         i += 1;
                     }
                 }
+            } else if off0 == 0 {
+                // Register-local first pass at stride p ∈ {1, 2}: within one 4-lane
+                // vector, lane l pairs with lane l ^ p. One load, one in-register
+                // partner shuffle, min/max, one constant-mask blend, one store.
+                // The blend keeps min in the low lane of each pair and max in the
+                // high lane, exactly the scalar comparator's writeback.
+                let mut i0 = 0usize;
+                if p_mask == 2 {
+                    // Partner = lanes rotated by 2 (swap 64-bit halves).
+                    let take_max = vcombine_u32(vdup_n_u32(0), vdup_n_u32(u32::MAX));
+                    while i0 + 4 <= end {
+                        let v = vld1q_s32(x.as_ptr().add(i0));
+                        let w = vextq_s32::<2>(v, v);
+                        let mn = vminq_s32(v, w);
+                        let mx = vmaxq_s32(v, w);
+                        vst1q_s32(x.as_mut_ptr().add(i0), vbslq_s32(take_max, mx, mn));
+                        i0 += 4;
+                    }
+                } else {
+                    // p = 1: partner = lanes swapped within each 64-bit pair.
+                    let take_max = vreinterpretq_u32_u64(vdupq_n_u64(0xFFFF_FFFF_0000_0000));
+                    while i0 + 4 <= end {
+                        let v = vld1q_s32(x.as_ptr().add(i0));
+                        let w = vrev64q_s32(v);
+                        let mn = vminq_s32(v, w);
+                        let mx = vmaxq_s32(v, w);
+                        vst1q_s32(x.as_mut_ptr().add(i0), vbslq_s32(take_max, mx, mn));
+                        i0 += 4;
+                    }
+                }
+                for i in i0..end {
+                    if i & p_mask == 0 {
+                        int32_minmax(x, i + off0, i + off1);
+                    }
+                }
+            } else if off1 >= 4 && !(off0 == 1 && off1 == 2) {
+                // Sub-pass with small selection stride p ∈ {1, 2} (off0 == p) and a
+                // partner at off1 ≥ 4: two loads, min/max, constant-mask blends keep
+                // inactive lanes (l & p ≠ 0) at their loaded values.
+                //
+                // For off1 = 4 the two 4-lane windows overlap by off1 − off0 ∈ {2, 3}
+                // trailing lanes of the low window. Those overlapping low-window lanes
+                // are always inactive (their element index has bit `p` set), so the
+                // low store writes them back unchanged and the high store — issued
+                // after it — supplies their comparator results. The one shape where an
+                // overlapping low-window lane is *active*, (p, off0, off1) = (1, 1, 2),
+                // is excluded above and stays scalar: either store order would clobber
+                // a comparator result there.
+                let take_lo = if p_mask == 2 {
+                    vcombine_u32(vdup_n_u32(u32::MAX), vdup_n_u32(0))
+                } else {
+                    vreinterpretq_u32_u64(vdupq_n_u64(0x0000_0000_FFFF_FFFF))
+                };
+                let mut i0 = 0usize;
+                while i0 + 4 <= end {
+                    let a = vld1q_s32(x.as_ptr().add(i0 + off0));
+                    let b = vld1q_s32(x.as_ptr().add(i0 + off1));
+                    let mn = vminq_s32(a, b);
+                    let mx = vmaxq_s32(a, b);
+                    vst1q_s32(x.as_mut_ptr().add(i0 + off0), vbslq_s32(take_lo, mn, a));
+                    vst1q_s32(x.as_mut_ptr().add(i0 + off1), vbslq_s32(take_lo, mx, b));
+                    i0 += 4;
+                }
+                for i in i0..end {
+                    if i & p_mask == 0 {
+                        int32_minmax(x, i + off0, i + off1);
+                    }
+                }
             } else {
-                // Small strides: scalar
+                // (1, 1, 2): overlapping windows with an active lane in the overlap —
+                // scalar is the only correct order.
                 for i in 0..end {
                     if i & p_mask == 0 {
                         int32_minmax(x, i + off0, i + off1);
@@ -392,9 +481,25 @@ pub mod random {
     /// then a constant-time sort shuffles them.
     #[allow(clippy::cast_possible_wrap)]
     pub fn random_tsmall(f: &mut [i8], p: usize, w: usize, rng: &mut impl Rng) {
-        let mut r = vec![0i32; p];
-        for val in r.iter_mut() {
-            *val = rng.random();
+        use crate::params::MAX_P;
+        use crate::scratch::uninit_scratch;
+
+        // One bulk RNG call instead of `p` per-element calls. For any `rand_core`
+        // generator, `next_u32` is defined as the next four stream bytes little-endian,
+        // so a byte fill reinterpreted LE is value-identical to the per-element
+        // `rng.random::<i32>()` loop this replaces — the deterministic-keygen KATs
+        // pin that equivalence.
+        // SAFETY: `fill_bytes` writes all `4 * p` bytes before they are read.
+        uninit_scratch!(bytes_buf: [u8; 4 * MAX_P]);
+        let bytes = &mut bytes_buf[..4 * p];
+        rng.fill_bytes(bytes);
+
+        // SAFETY: every element of `r` is written from `bytes` before being read.
+        uninit_scratch!(r_buf: [i32; MAX_P]);
+        let r = &mut r_buf[..p];
+        for (val, chunk) in r.iter_mut().zip(bytes.chunks_exact(4)) {
+            // SAFETY (index): chunks_exact(4) yields exactly 4-byte chunks.
+            *val = i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         }
         for val in r[..w].iter_mut() {
             *val &= -2;
@@ -402,12 +507,14 @@ pub mod random {
         for val in r[w..p].iter_mut() {
             *val = (*val & -3) | 1
         }
-        sort_uint32(&mut r, p);
+        sort_uint32(r, p);
         for (fv, &rv) in f.iter_mut().zip(r.iter()) {
             *fv = ((rv & 3) as i8) - 1;
         }
-        // The sorted tagged randomness fully determines the secret polynomial — wipe it.
-        zeroize::Zeroize::zeroize(&mut r);
+        // The tagged randomness fully determines the secret polynomial — wipe both
+        // frames (padding included), at wide-store granularity.
+        crate::wipe::wipe(bytes_buf);
+        crate::wipe::wipe(r_buf);
     }
 }
 

@@ -444,7 +444,10 @@ unsafe fn minus_product_shift_neon(
             let t0 = vshrq_n_s32(vaddq_s32(vmulq_s32(b0, kb2), k134m), 28);
             let r0 = vsubq_s32(b0, vmulq_s32(t0, qv));
             let r0 = vsubq_s32(r0, vandq_s32(vreinterpretq_s32_u32(vcgtq_s32(r0, hqv)), qv));
-            let r0 = vaddq_s32(r0, vandq_s32(vreinterpretq_s32_u32(vcgtq_s32(nhqv, r0)), qv));
+            let r0 = vaddq_s32(
+                r0,
+                vandq_s32(vreinterpretq_s32_u32(vcgtq_s32(nhqv, r0)), qv),
+            );
 
             // Barrett freeze batch 1, with strict-canonical correction
             let t1 = vshrq_n_s32(vmulq_s32(a1, kb1), 20);
@@ -452,7 +455,10 @@ unsafe fn minus_product_shift_neon(
             let t1 = vshrq_n_s32(vaddq_s32(vmulq_s32(b1, kb2), k134m), 28);
             let r1 = vsubq_s32(b1, vmulq_s32(t1, qv));
             let r1 = vsubq_s32(r1, vandq_s32(vreinterpretq_s32_u32(vcgtq_s32(r1, hqv)), qv));
-            let r1 = vaddq_s32(r1, vandq_s32(vreinterpretq_s32_u32(vcgtq_s32(nhqv, r1)), qv));
+            let r1 = vaddq_s32(
+                r1,
+                vandq_s32(vreinterpretq_s32_u32(vcgtq_s32(nhqv, r1)), qv),
+            );
 
             // Pack 4+4 i32 -> 8 i16 (naturally ordered, no permute needed)
             let packed = vcombine_s16(vmovn_s32(r0), vmovn_s32(r1));
