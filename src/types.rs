@@ -10,6 +10,12 @@ use zeroize::Zeroize;
 #[derive(Clone)]
 pub struct EncapsulationKey<P: SntrupParams> {
     bytes: Vec<u8>,
+    /// Decoded public-key polynomial and Hash4(pk), cached on first encapsulation.
+    ///
+    /// Encapsulation re-derives both on every call otherwise — repeated work that is
+    /// identical per key (~10% of the operation). Both are public values, so this
+    /// needs no zeroization. Mirrors `DecapsulationKey::h_cache`.
+    pk_cache: std::sync::OnceLock<(Vec<i16>, [u8; 32])>,
     _marker: PhantomData<P>,
 }
 
@@ -69,9 +75,31 @@ macro_rules! impl_from_vec {
     };
 }
 
-impl_from_vec!(EncapsulationKey);
 impl_from_vec!(Ciphertext);
 impl_from_vec!(SharedSecret);
+
+impl<P: SntrupParams> EncapsulationKey<P> {
+    pub(crate) fn from_vec(bytes: Vec<u8>) -> Self {
+        Self {
+            bytes,
+            pk_cache: std::sync::OnceLock::new(),
+            _marker: PhantomData,
+        }
+    }
+
+    /// The decoded public-key polynomial and Hash4(pk), computed once and reused.
+    #[cfg(feature = "ecap")]
+    fn cached_pk(&self) -> &(Vec<i16>, [u8; 32]) {
+        self.pk_cache.get_or_init(|| {
+            let params = P::params();
+            let mut h = vec![0i16; params.p];
+            crate::rq::encoding::rq_decode_into(&self.bytes, &mut h, params);
+            let mut pk_hash = [0u8; 32];
+            crate::utils::hash_prefix(&mut pk_hash, 4, &self.bytes);
+            (h, pk_hash)
+        })
+    }
+}
 
 // ---------------------------------------------------------------------------
 // DecapsulationKey: extract encapsulation key
@@ -186,10 +214,7 @@ macro_rules! impl_try_from {
                         actual: bytes.len(),
                     });
                 }
-                Ok(Self {
-                    bytes: bytes.to_vec(),
-                    _marker: PhantomData,
-                })
+                Ok(Self::from_vec(bytes.to_vec()))
             }
         }
 
@@ -362,7 +387,8 @@ impl<P: SntrupParams> SntrupKem<P> {
 impl<P: SntrupParams> EncapsulationKey<P> {
     /// Encapsulate: produce a ciphertext and shared secret.
     pub fn encapsulate(&self, rng: &mut impl rand::CryptoRng) -> (Ciphertext<P>, SharedSecret<P>) {
-        let (ct, ss) = crate::ops::encaps(&self.bytes, P::params(), rng);
+        let (h, pk_hash) = self.cached_pk();
+        let (ct, ss) = crate::ops::encaps(h, pk_hash, P::params(), rng);
         (Ciphertext::from_vec(ct), SharedSecret::from_vec(ss))
     }
 }

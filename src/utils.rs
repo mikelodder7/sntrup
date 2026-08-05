@@ -306,16 +306,16 @@ pub(crate) fn derive_key(
     clippy::cast_sign_loss,
     clippy::cast_possible_wrap
 )]
-pub(crate) fn create_cipher(r: &[i8], pk: &[u8], params: &SntrupParameters) -> (Vec<u8>, [u8; 32]) {
+pub(crate) fn create_cipher(
+    r: &[i8],
+    h: &[i16],
+    pk_hash: &[u8; 32],
+    params: &SntrupParameters,
+) -> (Vec<u8>, [u8; 32]) {
     let p = params.p;
 
     use crate::params::MAX_P;
 
-    // SAFETY: `rq_decode_into` writes all `p` elements of its output; nothing
-    // outside `..p` is ever read.
-    uninit_scratch!(h_buf: [i16; MAX_P]);
-    let h = &mut h_buf[..p];
-    rq::encoding::rq_decode_into(pk, h, params);
     // SAFETY: `rq::mult` writes all `p` product coefficients.
     uninit_scratch!(c_buf: [i16; MAX_P]);
     let c = &mut c_buf[..p];
@@ -328,11 +328,10 @@ pub(crate) fn create_cipher(r: &[i8], pk: &[u8], params: &SntrupParameters) -> (
     let r_enc = &mut r_enc_buf[..ses];
     zx::encoding::encode_into(r, r_enc, p, ses);
 
-    // Compute confirm hash: Hash(2 || Hash(3 || r_enc) || Hash4(pk))
-    let mut cache = [0u8; 32];
-    hash_prefix(&mut cache, 4, pk);
+    // Compute confirm hash: Hash(2 || Hash(3 || r_enc) || Hash4(pk)); Hash4(pk) is
+    // the caller-cached `pk_hash`.
     let mut confirm = [0u8; 32];
-    hash_confirm(&mut confirm, r_enc, &cache);
+    hash_confirm(&mut confirm, r_enc, pk_hash);
 
     // Ciphertext layout: rounded(rounded_encode_size) || confirm_hash(32)
     let mut cstr = vec![0u8; params.ct_size];
@@ -343,9 +342,9 @@ pub(crate) fn create_cipher(r: &[i8], pk: &[u8], params: &SntrupParameters) -> (
     let mut k = [0u8; 32];
     hash_session(&mut k, 1, r_enc, &cstr);
 
-    // Zeroize secret intermediates (whole frames, padding included).
+    // Zeroize secret intermediates (whole frames, padding included). `pk_hash` is
+    // public and caller-owned; nothing to wipe for it.
     crate::wipe::wipe(r_enc_buf);
-    cache.zeroize();
     confirm.zeroize();
 
     (cstr, k)

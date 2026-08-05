@@ -416,6 +416,11 @@ unsafe fn minus_product_shift_neon(
         let kb2 = vdupq_n_s32(b2);
         let k134m = vdupq_n_s32(134_217_728);
         let cv = vdupq_n_s32(c as i32);
+        // Strict-canonical correction bounds — see `modq::freeze`: the two Barrett steps
+        // alone can land a few counts outside ±(q-1)/2, and every freeze path must match
+        // the scalar reference byte-for-byte.
+        let hqv = vdupq_n_s32((q - 1) >> 1);
+        let nhqv = vdupq_n_s32(-((q - 1) >> 1));
 
         let mut j = (n - 2) as isize;
 
@@ -433,17 +438,21 @@ unsafe fn minus_product_shift_neon(
             let yv1 = vmovl_s16(vld1_s16(y.as_ptr().add(start + 4)));
             let a1 = vsubq_s32(zv1, vmulq_s32(yv1, cv));
 
-            // Barrett freeze batch 0
+            // Barrett freeze batch 0, with strict-canonical correction
             let t0 = vshrq_n_s32(vmulq_s32(a0, kb1), 20);
             let b0 = vsubq_s32(a0, vmulq_s32(t0, qv));
             let t0 = vshrq_n_s32(vaddq_s32(vmulq_s32(b0, kb2), k134m), 28);
             let r0 = vsubq_s32(b0, vmulq_s32(t0, qv));
+            let r0 = vsubq_s32(r0, vandq_s32(vreinterpretq_s32_u32(vcgtq_s32(r0, hqv)), qv));
+            let r0 = vaddq_s32(r0, vandq_s32(vreinterpretq_s32_u32(vcgtq_s32(nhqv, r0)), qv));
 
-            // Barrett freeze batch 1
+            // Barrett freeze batch 1, with strict-canonical correction
             let t1 = vshrq_n_s32(vmulq_s32(a1, kb1), 20);
             let b1 = vsubq_s32(a1, vmulq_s32(t1, qv));
             let t1 = vshrq_n_s32(vaddq_s32(vmulq_s32(b1, kb2), k134m), 28);
             let r1 = vsubq_s32(b1, vmulq_s32(t1, qv));
+            let r1 = vsubq_s32(r1, vandq_s32(vreinterpretq_s32_u32(vcgtq_s32(r1, hqv)), qv));
+            let r1 = vaddq_s32(r1, vandq_s32(vreinterpretq_s32_u32(vcgtq_s32(nhqv, r1)), qv));
 
             // Pack 4+4 i32 -> 8 i16 (naturally ordered, no permute needed)
             let packed = vcombine_s16(vmovn_s32(r0), vmovn_s32(r1));
@@ -462,6 +471,8 @@ unsafe fn minus_product_shift_neon(
             let b = vsubq_s32(a, vmulq_s32(t, qv));
             let t = vshrq_n_s32(vaddq_s32(vmulq_s32(b, kb2), k134m), 28);
             let r = vsubq_s32(b, vmulq_s32(t, qv));
+            let r = vsubq_s32(r, vandq_s32(vreinterpretq_s32_u32(vcgtq_s32(r, hqv)), qv));
+            let r = vaddq_s32(r, vandq_s32(vreinterpretq_s32_u32(vcgtq_s32(nhqv, r)), qv));
 
             vst1_s16(z.as_mut_ptr().add(start + 1), vmovn_s32(r));
             j -= 4;

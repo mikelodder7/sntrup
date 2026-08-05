@@ -16,9 +16,10 @@ PQClean's C reference:
 | encapsulate | 10.5 µs | 11.5 µs (0.91x) | 239.1 µs (22.9x) |
 | decapsulate | 8.4 µs | 8.4 µs (1.00x) | 607.0 µs (72.6x) |
 
-On aarch64 (Apple M2 Max) against their portable C builds: keypair by 25%, encapsulate by
-~3%, decapsulate by ~6%. We are ahead on every operation on both architectures while also
-zeroizing every secret-derived scratch buffer, which neither C reference does.
+On aarch64 (Apple M2 Max) against their portable C builds (2026-08-05, after the divstep
+port and the encapsulation-key cache): keypair 2.6x, encapsulate 19%, decapsulate 19%. We
+are ahead on every operation on both architectures while also zeroizing every secret-derived
+scratch buffer, which neither C reference does.
 
 ## Reading this file
 
@@ -1472,3 +1473,66 @@ the identity) is done and architecture-independent, and only the kernel is missi
 
 Modules compiled on x86_64 only: `r3::bitsliced`, `rq::codec761`, `rq::ntt`, `zx::codec3`,
 `zx::djbsort`.
+
+---
+
+# ARM round 2 (2026-08-05, Apple M2 Max): hardware confirmation, a latent NEON freeze bug, and the encapsulation-key cache
+
+First run of the x86 campaign's work on real ARM silicon. Three findings.
+
+**1. The divstep port's promised confirmation — delivered.** ARM round 1 shipped the NEON
+divstep inversion verified only under QEMU and said the speed "must be confirmed on real
+hardware before any claim is published." Confirmed: keypair 1341 → 695 µs (**1.9x**), against
+the same-run C references at 1.82–1.88 ms — **2.6x faster than both**. The portable pieces of
+the campaign carried too: decapsulate picked up the secret-key h-cache (84.5 → 72.2 µs) and
+encapsulate the scratch/codec work (50.0 → 47.4 µs), before this round's own change below.
+
+**2. A latent strict-freeze divergence in a NEON kernel, caught by the ported test suite.**
+`rq/vector.rs`'s `minus_product_shift_neon` still used the loose two-step Barrett freeze; the
+x86 campaign had made scalar `freeze` strictly canonical (± a-few-counts correction) and
+updated every kernel it could run — but could not run the NEON ones, and the fused-cswap
+differential test failed here on first execution (one lane off by exactly q, mask=0,
+q=4621). Fix: the same two branchless correction steps every other freeze path now carries.
+This is the second time a kernel-vs-reference differential test caught a divergence no
+KAT/round-trip run had surfaced — the tests transfer across machines even when the
+performance work cannot.
+
+**3. Encapsulation-key cache — the mirror image of round-1's h-cache.** The secret key got a
+decoded-polynomial cache on the x86 machine; the *encapsulation* key was still decoding the
+public polynomial (`rq_decode`) and hashing it (Hash4(pk)) on every call, both per-key
+constants. Same `OnceLock` pattern, both values public, no zeroization needed:
+encapsulate 47.4 → 41.8 µs (**−12%**).
+
+Where this machine stands after the round (same-run, Criterion means):
+
+| Operation | sntrup | PQClean (clean C) | liboqs (clean C) |
+|-----------|-------:|------------------:|-----------------:|
+| keypair | **696.5 µs** | 1.819 ms (2.6x) | 1.879 ms (2.7x) |
+| encapsulate | **41.8 µs** | 51.5 µs (1.23x) | 51.7 µs (1.24x) |
+| decapsulate | **72.7 µs** | 90.2 µs (1.24x) | 90.6 µs (1.25x) |
+
+Full sweep (`benches/mod.rs`): sntrup761 keygen 695 µs / encaps 42.1 µs / decaps 67.6 µs;
+sntrup1277 keygen 1.88 ms / encaps 97.8 µs / decaps 181.1 µs. (The comparison harness's
+decapsulate is ~5 µs above the sweep's because its keypair/ciphertext fixtures land colder
+in cache; same-run ratios are the meaningful numbers.)
+
+Housekeeping: the `[patch.crates-io]` vendored `oqs-sys` was in the x86 machine's tree but
+never committed (75 MB — too heavy for the repo). Reconstructed here from the registry
+package plus the documented build.rs tweak (`layout_tests(false)` for the sig header only),
+and `benches/comparison/.gitignore` now ignores `vendor/` — each bench machine recreates it
+the same way.
+
+## What's left on ARM, in expected-value order
+
+1. **Port the NTT multiply to NEON** — the big one. On x86 it took encapsulate −32% and
+   decapsulate −54%; the ARM schoolbook multiply is ~24 µs of encapsulate's 42. The
+   `ntt.rs` butterflies are AVX2-intrinsic-heavy (~360 intrinsic sites), so this is a real
+   porting project, not a recompile — but the twiddle tables, Good's permutation, and the
+   CRT recombination are architecture-independent and carry over unchanged.
+2. **The constant-weight sampler** (`random_tsmall` + Batcher sort): ~15 µs of encapsulate,
+   now its single largest component. The NEON sort processes 4 lanes per comparator pass
+   where 16 are available, and the small-stride passes fall back to scalar; djbsort-class
+   performance on this sorter would take several µs off encapsulate *and* keypair.
+3. **Codec vectorization** (`rq_decode` / `rounded_*`): the x86 profile's post-NTT
+   bottleneck. The variable-radix divmod chains are serial per level but lanes within a
+   level are independent; whatever shape fixes it on x86 should port.

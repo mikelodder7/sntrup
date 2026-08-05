@@ -46,12 +46,17 @@ pub(crate) fn keygen(params: &SntrupParameters, rng: &mut impl CryptoRng) -> (Ve
     result
 }
 
-/// Encapsulate with a public key.
+/// Encapsulate with a public key, supplied pre-decoded.
+///
+/// `h` is the decoded public-key polynomial and `pk_hash` is Hash4(pk); both are
+/// per-key constants the caller caches so repeated encapsulations skip re-deriving
+/// them.
 ///
 /// Returns `(ciphertext_bytes, shared_secret_bytes)`.
 #[cfg(feature = "ecap")]
 pub(crate) fn encaps(
-    pk: &[u8],
+    h: &[i16],
+    pk_hash: &[u8; 32],
     params: &SntrupParameters,
     rng: &mut impl CryptoRng,
 ) -> (Vec<u8>, Vec<u8>) {
@@ -61,7 +66,7 @@ pub(crate) fn encaps(
     let mut r = vec![0i8; p];
     zx::random::random_tsmall(&mut r, p, params.w, rng);
 
-    let (ct, ss) = utils::create_cipher(&r, pk, params);
+    let (ct, ss) = utils::create_cipher(&r, h, pk_hash, params);
 
     // Zeroize secret intermediate
     r.zeroize();
