@@ -265,8 +265,8 @@ On x86_64 (AMD Ryzen AI 9 HX 370, Zen 5), sntrup761, against liboqs's AVX2 build
 | encapsulate | 10.5 µs | 11.5 µs (0.91x) | 239.1 µs (22.9x) |
 | decapsulate | 8.4 µs | 8.4 µs (1.00x) | 607.0 µs (72.6x) |
 
-On aarch64 (Apple M2 Max), against their portable C build: keypair by 25%, encapsulate by
-~3%, decapsulate by ~6%.
+On aarch64 (Apple M2 Max), sntrup761, against their portable C builds: keypair 684 µs
+(2.7x), encapsulate 37.0 µs (1.40x), decapsulate 77.1 µs (1.19x).
 
 Two things drive the x86_64 numbers. Key generation runs the Bernstein–Yang divstep inversion
 through **AVX-512**, 32 coefficients per step — neither PQClean nor liboqs has a 512-bit path

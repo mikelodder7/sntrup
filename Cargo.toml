@@ -2,15 +2,19 @@
 authors = ["Michael Lodder <redmike7@gmail.com>"]
 categories = ["algorithms", "cryptography"]
 description = "Rust implementation of the Streamlined NTRU Prime KEM for all parameter sizes"
-documentation = "https://docs.rs/crate/sntrup"
+documentation = "https://docs.rs/sntrup"
 edition = "2024"
 exclude = ["benches/comparison/**", "tests/**", ".github/**"]
-keywords = ["cryptography", "hashing", "NTRU", "post-quantum"]
+keywords = ["cryptography", "kem", "NTRU", "post-quantum", "encryption"]
 license = "MIT OR Apache-2.0"
 name = "sntrup"
 readme = "README.md"
 repository = "https://github.com/mikelodder7/sntrup"
+rust-version = "1.95"
 version = "0.4.0"
+
+[package.metadata.docs.rs]
+features = ["kem", "serde", "std", "alloc"]
 
 [features]
 alloc = []
