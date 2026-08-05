@@ -17,6 +17,13 @@ pub struct EncapsulationKey<P: SntrupParams> {
 #[derive(Clone)]
 pub struct DecapsulationKey<P: SntrupParams> {
     bytes: Vec<u8>,
+    /// Decoded public-key polynomial, cached on first decapsulation.
+    ///
+    /// Decapsulation re-encrypts against the public key embedded in this secret
+    /// key, and decoding it is ~13% of the operation — pure repeated work, since
+    /// it is identical on every call. The public key is not secret, so this
+    /// needs no zeroization.
+    h_cache: std::sync::OnceLock<Vec<i16>>,
     _marker: PhantomData<P>,
 }
 
@@ -63,7 +70,6 @@ macro_rules! impl_from_vec {
 }
 
 impl_from_vec!(EncapsulationKey);
-impl_from_vec!(DecapsulationKey);
 impl_from_vec!(Ciphertext);
 impl_from_vec!(SharedSecret);
 
@@ -72,6 +78,26 @@ impl_from_vec!(SharedSecret);
 // ---------------------------------------------------------------------------
 
 impl<P: SntrupParams> DecapsulationKey<P> {
+    pub(crate) fn from_vec(bytes: Vec<u8>) -> Self {
+        Self {
+            bytes,
+            h_cache: std::sync::OnceLock::new(),
+            _marker: PhantomData,
+        }
+    }
+
+    /// The decoded public-key polynomial, computed once and reused.
+    fn cached_h(&self) -> &[i16] {
+        self.h_cache.get_or_init(|| {
+            let params = P::params();
+            let ses = params.small_encode_size;
+            let pk = &self.bytes[2 * ses..2 * ses + params.pk_size];
+            let mut h = vec![0i16; params.p];
+            crate::rq::encoding::rq_decode_into(pk, &mut h, params);
+            h
+        })
+    }
+
     /// Get the encapsulation (public) key embedded in this decapsulation key.
     ///
     /// SK layout: f(small_enc) || ginv(small_enc) || pk(pk_size) || rho(small_enc) || hash4(32)
@@ -191,7 +217,6 @@ macro_rules! impl_try_from {
 }
 
 impl_try_from!(EncapsulationKey, PK_BYTES);
-impl_try_from!(DecapsulationKey, SK_BYTES);
 impl_try_from!(Ciphertext, CT_BYTES);
 
 // ---------------------------------------------------------------------------
@@ -217,6 +242,26 @@ impl<P: SntrupParams> Eq for Ciphertext<P> {}
 // ---------------------------------------------------------------------------
 // ConstantTimeEq / PartialEq / Eq (DecapsulationKey)
 // ---------------------------------------------------------------------------
+
+impl<P: SntrupParams> TryFrom<&[u8]> for DecapsulationKey<P> {
+    type Error = Error;
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        if bytes.len() != P::SK_BYTES {
+            return Err(Error::InvalidSize {
+                expected: P::SK_BYTES,
+                actual: bytes.len(),
+            });
+        }
+        Ok(Self::from_vec(bytes.to_vec()))
+    }
+}
+
+impl<P: SntrupParams> TryFrom<Vec<u8>> for DecapsulationKey<P> {
+    type Error = Error;
+    fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
+        Self::try_from(bytes.as_slice())
+    }
+}
 
 impl<P: SntrupParams> ConstantTimeEq for DecapsulationKey<P> {
     fn ct_eq(&self, other: &Self) -> subtle::Choice {
@@ -330,7 +375,7 @@ impl<P: SntrupParams> DecapsulationKey<P> {
     /// On failure, returns a pseudorandom key derived from rho,
     /// indistinguishable from a valid key to an attacker.
     pub fn decapsulate(&self, ct: &Ciphertext<P>) -> SharedSecret<P> {
-        let ss = crate::ops::decaps(&self.bytes, &ct.bytes, P::params());
+        let ss = crate::ops::decaps(&self.bytes, self.cached_h(), &ct.bytes, P::params());
         SharedSecret::from_vec(ss)
     }
 }
@@ -369,10 +414,7 @@ mod serde_impl {
                             ),
                         ));
                     }
-                    Ok(Self {
-                        bytes: buf,
-                        _marker: PhantomData,
-                    })
+                    Ok(Self::from_vec(buf))
                 }
             }
         };

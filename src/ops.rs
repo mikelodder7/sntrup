@@ -73,7 +73,7 @@ pub(crate) fn encaps(
 ///
 /// Returns shared secret bytes.
 #[cfg(feature = "dcap")]
-pub(crate) fn decaps(sk: &[u8], ct: &[u8], params: &SntrupParameters) -> Vec<u8> {
-    let ss = utils::decapsulate_inner(ct, sk, params);
+pub(crate) fn decaps(sk: &[u8], h: &[i16], ct: &[u8], params: &SntrupParameters) -> Vec<u8> {
+    let ss = utils::decapsulate_inner(ct, sk, h, params);
     ss.to_vec()
 }

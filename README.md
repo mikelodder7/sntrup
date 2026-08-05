@@ -35,7 +35,7 @@ All key and ciphertext sizes are in bytes. Sizes are fixed per parameter set usi
 - All six parameter sizes: sntrup653, sntrup761, sntrup857, sntrup953, sntrup1013, sntrup1277
 - IND-CCA2 secure with implicit rejection
 - Constant-time operations throughout (branchless sort, constant-time comparison and selection)
-- SIMD acceleration (AVX2 on x86_64, NEON on aarch64) with automatic detection
+- SIMD acceleration with automatic run-time detection: AVX-512 and AVX2 (plus AVX-VNNI where present) on x86_64, NEON on aarch64
 - Optional `serde` support via the `serde` feature
 - Deterministic key generation from a 32-byte seed
 
@@ -48,7 +48,9 @@ The KEM API is split into three default features so downstream crates can pull i
 | `kgen`  | **yes** | Key generation: `SntrupKem::generate_key`, `SntrupKem::generate_key_deterministic` |
 | `ecap`  | **yes** | Encapsulation: `EncapsulationKey::encapsulate` |
 | `dcap`  | **yes** | Decapsulation: `DecapsulationKey::decapsulate` |
-| `force-scalar` | no | Disable SIMD (AVX2/NEON) and use pure-Rust scalar code |
+| `alloc` | no | Allocator-dependent APIs |
+| `std`   | no | Standard-library integration; implies `alloc` |
+| `force-scalar` | no | Compile out every SIMD kernel and use the portable scalar code paths only |
 | `kem`   | no | Implements the [`kem`](https://docs.rs/kem) crate's traits (`Encapsulate`, `Decapsulate`, `Kem`, ...) so this crate can be used generically alongside other KEMs. See [`sntrup::kem`](src/kem.rs) and `examples/kem_traits.rs`. |
 | `serde` | no | Enables `Serialize`/`Deserialize` for all key and ciphertext types (via `serdect` for constant-time hex encoding) |
 | `js`    | no | Enables WebAssembly support for `wasm32-unknown-unknown` by configuring `getrandom` to use JavaScript's `crypto.getRandomValues()` |
@@ -58,7 +60,7 @@ To use only a subset of the KEM API, disable defaults and pick the features you 
 ```toml
 [dependencies]
 # Decapsulation only (e.g. a receiver that never generates keys or encapsulates)
-sntrup = { version = "0.3", default-features = false, features = ["dcap"] }
+sntrup = { version = "0.4", default-features = false, features = ["dcap"] }
 ```
 
 ## Usage
@@ -143,7 +145,7 @@ assert_eq!(dk1, dk2);
 Enable the `serde` feature:
 
 ```toml
-sntrup = { version = "0.3", features = ["serde"] }
+sntrup = { version = "0.4", features = ["serde"] }
 ```
 
 Keys and ciphertexts serialize to hex in human-readable formats (JSON) and raw bytes in binary formats (postcard, bincode):
@@ -206,7 +208,7 @@ To compile for `wasm32-unknown-unknown`, enable the `js` feature so that `getran
 
 ```toml
 [dependencies]
-sntrup = { version = "0.3", features = ["js"] }
+sntrup = { version = "0.4", features = ["js"] }
 ```
 
 Install the target and build:
@@ -251,19 +253,39 @@ sntrup761 — the one parameter set with independent implementations to compare 
 cargo bench --manifest-path benches/comparison/Cargo.toml
 ```
 
-On an Apple M2 Max, this crate is faster than both C references on every operation — keypair by
-25%, encapsulate by ~3%, decapsulate by ~6% (sntrup761, NEON vs. their portable C) — while
-also zeroizing every secret-derived scratch buffer, which the C references do not do. The
-polynomial-multiply kernels compute each output coefficient as a contiguous dot product spread
-across eight independent widening multiply-accumulate chains (`smlal`-family on NEON, `pmaddwd`
-on AVX2), a shape taken from disassembling what clang's autovectorizer produces for PQClean's
-reference C and then out-tuning it. See
-[`benches/comparison/RESULTS.md`](benches/comparison/RESULTS.md) for one full run with
-machine/build details, the complete investigation narrative (four landed fixes, five measured
-dead ends), and the SIMD-testing gotcha every contributor should read: `--all-features` enables
-`force-scalar`, which silently compiles the SIMD kernels out of the test binary — the permanent
-kernel-vs-scalar differential tests in `src/rq.rs`/`src/r3.rs` only exercise SIMD when built
-with a feature set that leaves `force-scalar` off (e.g. `--features kem,serde,std`).
+This crate is faster than both C references on every operation, on both
+architectures, while also zeroizing every secret-derived scratch buffer — which neither C
+reference does.
+
+On x86_64 (AMD Ryzen AI 9 HX 370, Zen 5), sntrup761, against liboqs's AVX2 build:
+
+| Operation | sntrup | liboqs | PQClean |
+|-----------|-------:|-------:|--------:|
+| keypair | 106.6 µs | 107.9 µs (0.99x) | 4545.7 µs (42.7x) |
+| encapsulate | 10.5 µs | 11.5 µs (0.91x) | 239.1 µs (22.9x) |
+| decapsulate | 8.4 µs | 8.4 µs (1.00x) | 607.0 µs (72.6x) |
+
+On aarch64 (Apple M2 Max), against their portable C build: keypair by 25%, encapsulate by
+~3%, decapsulate by ~6%.
+
+Two things drive the x86_64 numbers. Key generation runs the Bernstein–Yang divstep inversion
+through **AVX-512**, 32 coefficients per step — neither PQClean nor liboqs has a 512-bit path
+for this KEM. Encapsulation and decapsulation run sntrup761's polynomial multiply as a
+number-theoretic transform (Good's 3x512 decomposition over the primes 7681 and 10753,
+recombined by CRT). Every other parameter set, and all of aarch64, uses a schoolbook kernel
+that computes each output coefficient as a contiguous dot product spread across eight
+independent widening multiply-accumulate chains (`smlal`-family on NEON, `pmaddwd`/`vpdpwssd`
+on x86_64) — a shape taken from disassembling what clang's autovectorizer produces for
+PQClean's reference C and then out-tuning it.
+
+See [`benches/comparison/RESULTS.md`](benches/comparison/RESULTS.md) for the full
+investigation narrative — every landed optimization with its measurement, and the measured
+dead ends — plus machine and build details.
+
+**A SIMD-testing gotcha every contributor should read:** `--all-features` enables
+`force-scalar`, which silently compiles the SIMD kernels out of the test binary. The permanent
+kernel-vs-scalar differential tests in `src/rq.rs` and `src/r3.rs` only exercise SIMD when
+built with a feature set that leaves `force-scalar` off, e.g. `--features kem,serde,std`.
 
 # License
 

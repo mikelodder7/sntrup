@@ -1,3 +1,5 @@
+#[cfg(all(target_arch = "x86_64", not(feature = "force-scalar")))]
+pub mod codec761;
 pub mod encoding;
 pub mod modq;
 #[cfg(all(target_arch = "x86_64", not(feature = "force-scalar")))]
@@ -48,8 +50,11 @@ fn reciprocal3_divstep(s: &[i8], params: &SntrupParameters) -> Vec<i16> {
     let q = params.q;
     let b1 = params.barrett1;
     let b2 = params.barrett2;
-    // 16-wide passes over `x[1..]` may touch `x[1 ..= ceil16(len)]`.
-    let ppad = 1 + p.next_multiple_of(16);
+    // The widest pass is 32 lanes, and `x[1..]` may be touched up to
+    // `x[1 ..= ceil32(len)]`. Padding to the widest kernel costs the narrower
+    // ones nothing: the extra lanes stay zero, and zero is a fixed point of the
+    // elimination step, so they neither affect nor are affected by the result.
+    let ppad = 1 + p.next_multiple_of(32);
 
     /// -1 if x != 0 (x canonical), else 0.
     fn nonzero_mask(x: i16) -> i32 {
@@ -97,8 +102,8 @@ fn reciprocal3_divstep(s: &[i8], params: &SntrupParameters) -> Vec<i16> {
         f[0] = f0;
 
         let mask = swap as isize;
-        // Buffers provide the 1 + ceil16(len) capacity the kernels require; the
-        // dispatchers pick the AVX2 or NEON implementation.
+        // Buffers provide the capacity the widest kernel requires; the
+        // dispatchers pick the AVX-512, AVX2 or NEON implementation.
         vector::swapeliminate(f, g, fg_len, f0, g0, mask, q);
         vector::xswapeliminate(v, r, vr_len, f0, g0, mask, q);
     };
@@ -134,7 +139,7 @@ fn reciprocal3_eliminate(s: &[i8], params: &SntrupParameters) -> Vec<i16> {
     let b2 = params.barrett2;
     let loops = 2 * p + 1;
 
-    // Buffers are padded to a multiple of the widest SIMD block (16 i16 lanes) so the
+    // Buffers are padded to a multiple of this path's SIMD block (16 i16 lanes) so the
     // vector kernels never fall into their scalar tail loops inside the hot iteration.
     // Padding lanes start at zero; in u/v they provably stay zero (their source lanes
     // are zero too), and in f/g anything written above index p only ever propagates
@@ -633,10 +638,17 @@ fn scale3_freeze3_scalar(out: &mut [i8], cf: &[i16], params: &SntrupParameters) 
     }
 }
 
-/// AVX2 form: eight coefficients per iteration, replicating `modq::freeze`
-/// (two Barrett steps plus the strict-canonical correction) and then
-/// `mod3::freeze` (two Barrett steps) lanewise, so it agrees with the scalar
-/// path exactly.
+/// AVX2 form: 32 coefficients per iteration, via a threshold rather than the
+/// literal composition the scalar path computes.
+///
+/// Writing `s = 3c - kq` for the `k` that lands `s` in the centered range,
+/// every parameter set has `q == 1 (mod 3)`, so `s == -k (mod 3)` and the
+/// ternary result depends only on `k` — the value of `c mod 3` cannot reach the
+/// output at all. And `|3c| <= 1.5(q - 1)` bounds `k` to `{-1, 0, 1}`, so `k`
+/// is just the sign of `c` outside a dead zone. The whole two-Barrett,
+/// two-freeze composition is therefore a pair of comparisons, which
+/// `scale3_collapses_to_a_threshold_on_c` verifies exhaustively over every
+/// representable `c` for all six parameter sets.
 #[cfg(all(target_arch = "x86_64", not(feature = "force-scalar")))]
 #[target_feature(enable = "avx2")]
 #[allow(unsafe_code, clippy::cast_possible_truncation)]
@@ -645,53 +657,29 @@ unsafe fn scale3_freeze3_avx2(out: &mut [i8], cf: &[i16], params: &SntrupParamet
         use core::arch::x86_64::*;
 
         let q = params.q;
-        let qv = _mm256_set1_epi32(q);
-        let kb1 = _mm256_set1_epi32(params.barrett1);
-        let kb2 = _mm256_set1_epi32(params.barrett2);
-        let k134m = _mm256_set1_epi32(134_217_728);
-        let hqv = _mm256_set1_epi32((q - 1) >> 1);
-        let nhqv = _mm256_set1_epi32(-((q - 1) >> 1));
-        let three = _mm256_set1_epi32(3);
-        let c3a = _mm256_set1_epi32(10923);
-        let c3b = _mm256_set1_epi32(89_478_485);
+        // Smallest `c` with `k == 1`: `3c` must reach `q/2`, so `t = ceil((q + 1) / 6)`.
+        let t = (q + 6) / 6;
+        // `cmpgt` only tests strict `>`, so compare against the neighbours.
+        let hi = _mm256_set1_epi16((t - 1) as i16);
+        let lo = _mm256_set1_epi16((1 - t) as i16);
 
         let n = out.len().min(cf.len());
         let mut i = 0usize;
-        while i + 8 <= n {
-            let c = _mm256_cvtepi16_epi32(_mm_loadu_si128(cf.as_ptr().add(i) as *const __m128i));
-            let a = _mm256_mullo_epi32(c, three);
-
-            // modq::freeze
-            let t = _mm256_srai_epi32::<20>(_mm256_mullo_epi32(a, kb1));
-            let b = _mm256_sub_epi32(a, _mm256_mullo_epi32(t, qv));
-            let t = _mm256_srai_epi32::<28>(_mm256_add_epi32(_mm256_mullo_epi32(b, kb2), k134m));
-            let r = _mm256_sub_epi32(b, _mm256_mullo_epi32(t, qv));
-            let r = _mm256_sub_epi32(r, _mm256_and_si256(_mm256_cmpgt_epi32(r, hqv), qv));
-            let r = _mm256_add_epi32(r, _mm256_and_si256(_mm256_cmpgt_epi32(nhqv, r), qv));
-
-            // mod3::freeze
-            let u = _mm256_sub_epi32(
-                r,
-                _mm256_mullo_epi32(three, _mm256_srai_epi32::<15>(_mm256_mullo_epi32(c3a, r))),
-            );
-            let v = _mm256_sub_epi32(
-                u,
-                _mm256_mullo_epi32(
-                    three,
-                    _mm256_srai_epi32::<28>(_mm256_add_epi32(_mm256_mullo_epi32(c3b, u), k134m)),
-                ),
-            );
-
-            // Pack 8 x i32 in [-1, 1] down to 8 x i8.
-            let p16 = _mm256_packs_epi32(v, v);
-            let p16 = _mm256_permute4x64_epi64::<0b0000_1000>(p16);
-            let p8 = _mm_packs_epi16(_mm256_castsi256_si128(p16), _mm256_castsi256_si128(p16));
-            _mm_storel_epi64(out.as_mut_ptr().add(i) as *mut __m128i, p8);
-            i += 8;
+        while i + 32 <= n {
+            let c0 = _mm256_loadu_si256(cf.as_ptr().add(i) as *const __m256i);
+            let c1 = _mm256_loadu_si256(cf.as_ptr().add(i + 16) as *const __m256i);
+            // Each mask is all-ones (-1) when set, so the difference is -1 above
+            // the band, +1 below it and 0 inside.
+            let v0 = _mm256_sub_epi16(_mm256_cmpgt_epi16(c0, hi), _mm256_cmpgt_epi16(lo, c0));
+            let v1 = _mm256_sub_epi16(_mm256_cmpgt_epi16(c1, hi), _mm256_cmpgt_epi16(lo, c1));
+            // `packs` interleaves the two 128-bit halves; the permute undoes it.
+            let packed = _mm256_permute4x64_epi64::<0b1101_1000>(_mm256_packs_epi16(v0, v1));
+            _mm256_storeu_si256(out.as_mut_ptr().add(i) as *mut __m256i, packed);
+            i += 32;
         }
         while i < n {
-            let scaled = modq::freeze(3 * i32::from(cf[i]), q, params.barrett1, params.barrett2);
-            out[i] = crate::r3::mod3::freeze(i32::from(scaled));
+            let c = i32::from(cf[i]);
+            out[i] = i8::from(c <= -t) - i8::from(c >= t);
             i += 1;
         }
     }
@@ -818,6 +806,27 @@ mod tests {
                 let mut got = vec![0i8; p];
                 scale3_freeze3(&mut got, &f, params);
                 assert_eq!(got, want, "scale3 const {v} p={p}");
+            }
+        }
+    }
+
+    #[test]
+    fn scale3_collapses_to_a_threshold_on_c() {
+        for params in all_params() {
+            let q = params.q;
+            let half = (q - 1) / 2;
+            let t = (q + 6) / 6;
+            for c in -half..=half {
+                let mut got = [0i8; 1];
+                scale3_freeze3_scalar(&mut got, &[c as i16], params);
+                let want = if c >= t {
+                    -1i8
+                } else if c <= -t {
+                    1
+                } else {
+                    0
+                };
+                assert_eq!(got[0], want, "q={q} c={c}");
             }
         }
     }

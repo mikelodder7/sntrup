@@ -167,24 +167,32 @@ fn mask(t: usize) -> __m256i {
 #[target_feature(enable = "avx2")]
 fn good(fpad: &mut [i16], f: &[i16; 768]) {
     unsafe {
+        // Reindexing the track loop by `u = (t - b) mod 3` makes the mask index
+        // a constant and moves the block-dependent rotation into the store
+        // address, which is scalar arithmetic. The three masks then stay in
+        // registers instead of being reloaded six times per block. The second
+        // operand's block index is always `b0 + 2 (mod 3)`, so its mask is
+        // `m[(u + 1) % 3]`.
+        let m = [mask(0), mask(1), mask(2)];
         let mut j = 0usize;
         while j < 512 {
             let b0 = (j / 16) % 3;
             let f0 = _mm256_loadu_si256(f.as_ptr().add(j) as *const __m256i);
             if j < 256 {
-                let b1 = ((512 + j) / 16) % 3;
                 let f1 = _mm256_loadu_si256(f.as_ptr().add(512 + j) as *const __m256i);
-                for t in 0..3 {
+                for u in 0..3 {
                     let v = _mm256_or_si256(
-                        _mm256_and_si256(f0, mask((t + 3 - b0) % 3)),
-                        _mm256_and_si256(f1, mask((t + 3 - b1) % 3)),
+                        _mm256_and_si256(f0, m[u]),
+                        _mm256_and_si256(f1, m[(u + 1) % 3]),
                     );
-                    _mm256_storeu_si256(fpad.as_mut_ptr().add(512 * t + j) as *mut __m256i, v);
+                    let track = (u + b0) % 3;
+                    _mm256_storeu_si256(fpad.as_mut_ptr().add(512 * track + j) as *mut __m256i, v);
                 }
             } else {
-                for t in 0..3 {
-                    let v = _mm256_and_si256(f0, mask((t + 3 - b0) % 3));
-                    _mm256_storeu_si256(fpad.as_mut_ptr().add(512 * t + j) as *mut __m256i, v);
+                for u in 0..3 {
+                    let v = _mm256_and_si256(f0, m[u]);
+                    let track = (u + b0) % 3;
+                    _mm256_storeu_si256(fpad.as_mut_ptr().add(512 * track + j) as *mut __m256i, v);
                 }
             }
             j += 16;
@@ -198,20 +206,25 @@ fn good(fpad: &mut [i16], f: &[i16; 768]) {
 #[target_feature(enable = "avx2")]
 fn ungood(h: &mut [i16; 1536], fpad: &[i16]) {
     unsafe {
+        // Same reindexing as `good`, in the opposite direction: with `u` as the
+        // loop variable the masks are constants held in registers and the
+        // block-dependent rotation lands on the load address instead.
+        let m = [mask(0), mask(1), mask(2)];
         let mut j = 0usize;
         while j < 512 {
-            let t0 = _mm256_loadu_si256(fpad.as_ptr().add(j) as *const __m256i);
-            let t1 = _mm256_loadu_si256(fpad.as_ptr().add(512 + j) as *const __m256i);
-            let t2 = _mm256_loadu_si256(fpad.as_ptr().add(1024 + j) as *const __m256i);
-            let tracks = [t0, t1, t2];
+            let jb = j / 16;
             for k in 0..3 {
-                let idx = k * 512 + j;
-                let b = (idx / 16) % 3;
+                // Block index of output block `k`: `(k * 32 + jb) % 3`, and
+                // `32 == 2 (mod 3)`.
+                let b = (2 * k + jb) % 3;
                 let mut g = _mm256_setzero_si256();
-                for t in 0..3 {
-                    g = _mm256_or_si256(g, _mm256_and_si256(tracks[t], mask((t + 3 - b) % 3)));
+                for u in 0..3 {
+                    let track = _mm256_loadu_si256(
+                        fpad.as_ptr().add(512 * ((u + b) % 3) + j) as *const __m256i
+                    );
+                    g = _mm256_or_si256(g, _mm256_and_si256(track, m[u]));
                 }
-                _mm256_storeu_si256(h.as_mut_ptr().add(idx) as *mut __m256i, g);
+                _mm256_storeu_si256(h.as_mut_ptr().add(k * 512 + j) as *mut __m256i, g);
             }
             j += 16;
         }
@@ -226,12 +239,20 @@ macro_rules! prime_pass {
         // One contiguous 6x512 buffer: Good's three f-tracks then three g-tracks,
         // exactly the layout `ntt512` batches over. Writing the tracks straight
         // into it avoids copying 6 KB in and out per prime.
-        let mut fg = [0i16; 6 * 512];
+        // SAFETY: `good` stores to every 16-coefficient block of all three of
+        // its output tracks unconditionally, so the two calls below fill all
+        // 6 x 512 elements before `ntt512` reads any.
+        let mut fg_slot = core::mem::MaybeUninit::<[i16; 6 * 512]>::uninit();
+        let fg = crate::scratch::uninit(&mut fg_slot);
         good(&mut fg[..3 * 512], $f);
         good(&mut fg[3 * 512..], $g);
-        ntt512(&mut fg, 6, $qdata);
+        ntt512(fg, 6, $qdata);
 
-        let mut hpad = [0i16; 3 * 512];
+        // SAFETY: the pointwise loop below stores to `i`, `512 + i` and
+        // `1024 + i` for every `i` in `(0..512).step_by(16)`, covering all
+        // 3 x 512 elements before `invntt512` reads them.
+        let mut hpad_slot = core::mem::MaybeUninit::<[i16; 3 * 512]>::uninit();
+        let hpad = crate::scratch::uninit(&mut hpad_slot);
         let mut i = 0usize;
         while i < 512 {
             let f0 = $sq(_mm256_loadu_si256(fg.as_ptr().add(i) as *const __m256i));
@@ -260,8 +281,8 @@ macro_rules! prime_pass {
             i += 16;
         }
 
-        invntt512(&mut hpad, 3, $qdata);
-        ungood(&mut $out, &hpad);
+        invntt512(hpad, 3, $qdata);
+        ungood($out, &hpad[..]);
     }};
 }
 
@@ -270,8 +291,13 @@ macro_rules! prime_pass {
 #[target_feature(enable = "avx2")]
 fn mult768(h: &mut [i16; 1536], f: &[i16; 768], g: &[i16; 768]) {
     unsafe {
-        let mut h7681 = [0i16; 1536];
-        let mut h10753 = [0i16; 1536];
+        // SAFETY: each is filled by `ungood`, whose store covers `k * 512 + j`
+        // for all `k < 3` and every `j` in `(0..512).step_by(16)` — all 1536
+        // elements — before the CRT loop reads them.
+        let mut h7681_slot = core::mem::MaybeUninit::<[i16; 1536]>::uninit();
+        let h7681 = crate::scratch::uninit(&mut h7681_slot);
+        let mut h10753_slot = core::mem::MaybeUninit::<[i16; 1536]>::uninit();
+        let h10753 = crate::scratch::uninit(&mut h10753_slot);
         prime_pass!(f, g, h7681, squeeze_7681, mulmod_7681, &QDATA_7681);
         prime_pass!(f, g, h10753, squeeze_10753, mulmod_10753, &QDATA_10753);
 
@@ -299,7 +325,9 @@ fn mult768(h: &mut [i16; 1536], f: &[i16; 768], g: &[i16; 768]) {
 #[target_feature(enable = "avx2")]
 fn mult768_3(h: &mut [i16; 1536], f: &[i16; 768], g: &[i16; 768]) {
     unsafe {
-        let mut h7681 = [0i16; 1536];
+        // SAFETY: filled in full by `ungood`, as in `mult768`.
+        let mut h7681_slot = core::mem::MaybeUninit::<[i16; 1536]>::uninit();
+        let h7681 = crate::scratch::uninit(&mut h7681_slot);
         prime_pass!(f, g, h7681, squeeze_7681, mulmod_7681, &QDATA_7681);
         let mut i = 0usize;
         while i < 1536 {
@@ -334,18 +362,32 @@ fn freeze_3(x: __m256i) -> __m256i {
 pub fn mult3_761(h: &mut [i8], f: &[i8], g: &[i8]) {
     unsafe {
         const P: usize = 761;
-        let mut fp = [0i16; 768];
-        let mut gp = [0i16; 768];
+        // SAFETY: the loop writes `0..P` and the tail clear covers `P..768`,
+        // so both are complete before `mult768_3` reads them. The 768-length
+        // padding is what makes the transform's zero-extension work, so it has
+        // to be written explicitly now that the buffer is not pre-zeroed.
+        let mut fp_slot = core::mem::MaybeUninit::<[i16; 768]>::uninit();
+        let fp = crate::scratch::uninit(&mut fp_slot);
+        let mut gp_slot = core::mem::MaybeUninit::<[i16; 768]>::uninit();
+        let gp = crate::scratch::uninit(&mut gp_slot);
         for k in 0..P {
             fp[k] = i16::from(f[k]);
             gp[k] = i16::from(g[k]);
         }
+        for k in P..768 {
+            fp[k] = 0;
+            gp[k] = 0;
+        }
 
-        let mut fg = [0i16; 1536];
-        mult768_3(&mut fg, &fp, &gp);
+        // SAFETY: `mult768_3` writes all 1536 coefficients of its output.
+        let mut fg_slot = core::mem::MaybeUninit::<[i16; 1536]>::uninit();
+        let fg = crate::scratch::uninit(&mut fg_slot);
+        mult768_3(fg, fp, gp);
 
         fg[0] -= fg[P - 1];
-        let mut out = [0i16; 768];
+        // SAFETY: the loop below stores every 16-element block of `0..768`.
+        let mut out_slot = core::mem::MaybeUninit::<[i16; 768]>::uninit();
+        let out = crate::scratch::uninit(&mut out_slot);
         let mut i = 0usize;
         while i < 768 {
             let a = _mm256_loadu_si256(fg.as_ptr().add(i) as *const __m256i);
@@ -359,10 +401,10 @@ pub fn mult3_761(h: &mut [i8], f: &[i8], g: &[i8]) {
             h[k] = out[k] as i8;
         }
         // Both operands are secret at every call site — wipe the working buffers.
-        wipe(&mut fp);
-        wipe(&mut gp);
-        wipe(&mut fg);
-        wipe(&mut out);
+        wipe(fp);
+        wipe(gp);
+        wipe(fg);
+        wipe(out);
     }
 }
 
@@ -370,8 +412,13 @@ pub fn mult3_761(h: &mut [i8], f: &[i8], g: &[i8]) {
 pub fn mult761(h: &mut [i16], f: &[i16], g: &[i8]) {
     unsafe {
         const P: usize = 761;
-        let mut fp = [0i16; 768];
-        let mut gp = [0i16; 768];
+        // SAFETY: the loop below stores every 16-element block of `0..768`.
+        let mut fp_slot = core::mem::MaybeUninit::<[i16; 768]>::uninit();
+        let fp = crate::scratch::uninit(&mut fp_slot);
+        // SAFETY: written over `0..P` by the copy loop and `P..768` by the tail
+        // clear, both before `mult768` reads it.
+        let mut gp_slot = core::mem::MaybeUninit::<[i16; 768]>::uninit();
+        let gp = crate::scratch::uninit(&mut gp_slot);
         let mut i = 0usize;
         while i < 768 {
             let x = if i < P {
@@ -392,9 +439,14 @@ pub fn mult761(h: &mut [i16], f: &[i16], g: &[i8]) {
         for k in 0..P {
             gp[k] = i16::from(g[k]);
         }
+        for k in P..768 {
+            gp[k] = 0;
+        }
 
-        let mut fg = [0i16; 1536];
-        mult768(&mut fg, &fp, &gp);
+        // SAFETY: `mult768` writes all 1536 coefficients of its output.
+        let mut fg_slot = core::mem::MaybeUninit::<[i16; 1536]>::uninit();
+        let fg = crate::scratch::uninit(&mut fg_slot);
+        mult768(fg, fp, gp);
 
         fg[0] -= fg[P - 1];
         let mut i = 0usize;
@@ -409,9 +461,9 @@ pub fn mult761(h: &mut [i16], f: &[i16], g: &[i8]) {
         h[..P].copy_from_slice(&fp[..P]);
         // `g` is secret at every call site — wipe the operand copies and the
         // product scratch.
-        wipe(&mut fp);
-        wipe(&mut gp);
-        wipe(&mut fg);
+        wipe(fp);
+        wipe(gp);
+        wipe(fg);
     }
 }
 

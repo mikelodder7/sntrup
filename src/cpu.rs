@@ -17,6 +17,9 @@ static AVX2_STATE: AtomicU8 = AtomicU8::new(0);
 #[cfg(all(target_arch = "x86_64", not(feature = "force-scalar")))]
 static AVXVNNI_STATE: AtomicU8 = AtomicU8::new(0);
 
+#[cfg(all(target_arch = "x86_64", not(feature = "force-scalar")))]
+static AVX512_STATE: AtomicU8 = AtomicU8::new(0);
+
 /// Returns `true` if the host CPU supports AVX2.
 #[cfg(all(target_arch = "x86_64", not(feature = "force-scalar")))]
 #[inline]
@@ -48,6 +51,25 @@ pub(crate) fn has_avxvnni() -> bool {
     }
 }
 
+/// Returns `true` if the host CPU supports the AVX-512 subsets the 512-bit
+/// kernels use: `F` for the base instruction set, `BW` for 16-bit lane
+/// arithmetic and `VL` so 256-bit forms remain available alongside.
+#[cfg(all(target_arch = "x86_64", not(feature = "force-scalar")))]
+#[inline]
+pub(crate) fn has_avx512() -> bool {
+    match AVX512_STATE.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let detected = std::is_x86_feature_detected!("avx512f")
+                && std::is_x86_feature_detected!("avx512bw")
+                && std::is_x86_feature_detected!("avx512vl");
+            AVX512_STATE.store(if detected { 1 } else { 2 }, Ordering::Relaxed);
+            detected
+        }
+    }
+}
+
 #[cfg(all(test, target_arch = "x86_64", not(feature = "force-scalar")))]
 mod tests {
     use super::*;
@@ -61,6 +83,10 @@ mod tests {
         let first = has_avxvnni();
         for _ in 0..8 {
             assert_eq!(has_avxvnni(), first);
+        }
+        let first = has_avx512();
+        for _ in 0..8 {
+            assert_eq!(has_avx512(), first);
         }
     }
 }
